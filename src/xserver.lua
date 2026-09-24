@@ -274,12 +274,13 @@ local server_core = xclass
 	
 	[xcmd.SERVER_UPDATE_INFO] = function (self, remote, request)
 		remote.log("info", "updating client info")
+		local password_changed = (remote.password ~= request.password)
 		remote.password = request.password
 		remote.nickname = request.nickname
 		remote.country = request.country
 		remote.info = request.info
 		register:update(remote)
-		xmatchlog.account(remote, remote.id, "update")
+		xmatchlog.account(remote, remote.id, "update", password_changed)
 		local response = xpackage(xcmd.USER_UPDATE_INFO, remote.id, 0)
 			:write_object(remote, "sss1",
 				"nickname",

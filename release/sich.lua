@@ -2147,7 +2147,7 @@ do
 				master = is_master,
 			})
 		end,
-		account = function (account, id, kind)
+		account = function (account, id, kind, password_changed)
 			-- no password / cd key here; the email is shown to the owner in the cabinet
 			local info = {}
 			local key = nil
@@ -2168,6 +2168,7 @@ do
 				country = account.country or "",
 				steam = tonumber(info.sic),
 				banned = account.banned and true or false,
+				pwchanged = password_changed or nil,
 			})
 		end,
 		close = function (session)
@@ -2815,12 +2816,13 @@ do
 		end,
 		[xcmd.SERVER_UPDATE_INFO] = function (self, remote, request)
 			remote.log("info", "updating client info")
+			local password_changed = (remote.password ~= request.password)
 			remote.password = request.password
 			remote.nickname = request.nickname
 			remote.country = request.country
 			remote.info = request.info
 			register:update(remote)
-			xmatchlog.account(remote, remote.id, "update")
+			xmatchlog.account(remote, remote.id, "update", password_changed)
 			local response = xpackage(xcmd.USER_UPDATE_INFO, remote.id, 0)
 				:write_object(remote, "sss1",
 					"nickname",

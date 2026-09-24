@@ -141,7 +141,7 @@ xmatchlog =
 		})
 	end,
 
-	account = function (account, id, kind)
+	account = function (account, id, kind, password_changed)
 		-- no password / cd key here; the email is shown to the owner in the cabinet
 		local info = {}
 		local key = nil
@@ -162,6 +162,7 @@ xmatchlog =
 			country = account.country or "",
 			steam = tonumber(info.sic),
 			banned = account.banned and true or false,
+			pwchanged = password_changed or nil,
 		})
 	end,
 
