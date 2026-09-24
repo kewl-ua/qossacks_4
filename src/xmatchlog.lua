@@ -149,7 +149,57 @@ xmatchlog =
 	end,
 }
 
+local function write_status(status_path)
+	local online = {}
+	local rooms = {}
+	for _, server in pairs(servers or {}) do
+		for _, client in pairs(server.clients) do
+			table.insert(online, {
+				id = client.id,
+				nick = client.nickname or "",
+				room = client.session and client.session.real_name or nil,
+			})
+		end
+		for _, session in pairs(server.sessions) do
+			local players = {}
+			for _, client in pairs(session.clients) do
+				table.insert(players, client.nickname or "")
+			end
+			table.insert(rooms, {
+				name = session.real_name,
+				map = session.mapname,
+				max_players = session.max_players,
+				has_password = (session.real_pass ~= ""),
+				playing = session.locked,
+				players = players,
+			})
+		end
+	end
+	local tmp = status_path .. ".tmp"
+	local file = io.open(tmp, "wb")
+	if not file then
+		return
+	end
+	file:write(encode({t = xsocket.gettime(), boot = boot, online = online, rooms = rooms}), "\n")
+	file:close()
+	os.rename(tmp, status_path)
+end
+
 if path then
 	log("info", "writing match events to %s", path)
 	xmatchlog.emit({ev = "boot", version = SICH_VERSION})
+end
+
+if xconfig.status then
+	log("info", "writing lobby status to %s", xconfig.status)
+	xsocket.spawn(
+		function ()
+			while true do
+				local ok, err = pcall(write_status, xconfig.status)
+				if not ok then
+					log("error", "status: %s", tostring(err))
+				end
+				xsocket.sleep(5.0)
+			end
+		end)
 end
