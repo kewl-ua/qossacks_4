@@ -68,6 +68,27 @@ xrecord =
 		file:write(stamp(session), u32(#payload), u16(MARKER), u32(data.id or 0), u32(0), payload)
 	end,
 
+	-- packets Sich can not handle, from anyone, in or out of a room:
+	-- <recordings>/unhandled_<boot>.rec, same format as match recordings
+	unhandled = function (remote, packet)
+		if not dir then
+			return
+		end
+		if not xrecord.unhandled_file then
+			local file = io.open(("%s/unhandled_%d.rec"):format(dir, xmatchlog.boot), "ab")
+			if not file then
+				return
+			end
+			file:setvbuf("line")
+			file:write("QLREC1\n")
+			xrecord.unhandled_file = file
+			xrecord.unhandled_t0 = xsocket.gettime()
+		end
+		local ms = (xsocket.gettime() - xrecord.unhandled_t0) * 1000
+		xrecord.unhandled_file:write(u32(ms), packet:get())
+		xrecord.unhandled_file:flush()
+	end,
+
 	finish = function (session)
 		local file = session.rec_file
 		if not file then

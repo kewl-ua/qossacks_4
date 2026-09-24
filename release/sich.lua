@@ -2303,6 +2303,26 @@ do
 			local payload = xmatchlog.encode(data)
 			file:write(stamp(session), u32(#payload), u16(MARKER), u32(data.id or 0), u32(0), payload)
 		end,
+		-- packets Sich can not handle, from anyone, in or out of a room:
+		-- <recordings>/unhandled_<boot>.rec, same format as match recordings
+		unhandled = function (remote, packet)
+			if not dir then
+				return
+			end
+			if not xrecord.unhandled_file then
+				local file = io.open(("%s/unhandled_%d.rec"):format(dir, xmatchlog.boot), "ab")
+				if not file then
+					return
+				end
+				file:setvbuf("line")
+				file:write("QLREC1\n")
+				xrecord.unhandled_file = file
+				xrecord.unhandled_t0 = xsocket.gettime()
+			end
+			local ms = (xsocket.gettime() - xrecord.unhandled_t0) * 1000
+			xrecord.unhandled_file:write(u32(ms), packet:get())
+			xrecord.unhandled_file:flush()
+		end,
 		finish = function (session)
 			local file = session.rec_file
 			if not file then
@@ -2597,6 +2617,7 @@ do
 			end
 			local client = self.clients[request.id]
 			client.score = request.score
+			xmatchlog.emit({ev = "score", sid = self.session_id, id = request.id, score = request.score})
 			return xpackage(xcmd.USER_SESSION_CLSCORE, remote.id, 0)
 				:write_object(client, "44",
 					"id",
@@ -2700,10 +2721,12 @@ do
 		process = function (self, remote, packet)
 			local request = packet:parse(self.vcore, self.vdata)
 			if not request then
-				return
+				-- unknown format: keep it for protocol research (end-of-game stats?)
+				return xrecord.unhandled(remote, packet)
 			end
 			local code = request.code
 			if not self[code] then
+				xrecord.unhandled(remote, packet)
 				return log("warn", "request is not allowed or not implemented: %s", xcmd.format(code))
 			end
 			return self[code](self, remote, request)

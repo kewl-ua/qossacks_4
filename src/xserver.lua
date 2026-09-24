@@ -33,10 +33,12 @@ local custom_core = xclass
 	process = function (self, remote, packet)
 		local request = packet:parse(self.vcore, self.vdata)
 		if not request then
-			return
+			-- unknown format: keep it for protocol research (end-of-game stats?)
+			return xrecord.unhandled(remote, packet)
 		end
 		local code = request.code
 		if not self[code] then
+			xrecord.unhandled(remote, packet)
 			return log("warn", "request is not allowed or not implemented: %s", xcmd.format(code))
 		end
 		return self[code](self, remote, request)

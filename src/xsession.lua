@@ -310,6 +310,7 @@ xsession = xclass
 		end
 		local client = self.clients[request.id]
 		client.score = request.score
+		xmatchlog.emit({ev = "score", sid = self.session_id, id = request.id, score = request.score})
 		return xpackage(xcmd.USER_SESSION_CLSCORE, remote.id, 0)
 			:write_object(client, "44",
 				"id",
