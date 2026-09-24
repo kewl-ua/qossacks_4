@@ -142,7 +142,7 @@ xmatchlog =
 	end,
 
 	account = function (account, id, kind)
-		-- no email / password / cd key here: only what the ladder needs
+		-- no password / cd key here; the email is shown to the owner in the cabinet
 		local info = {}
 		local key = nil
 		for part in ((account.info or "") .. "|"):gmatch("([^|]*)|") do
@@ -158,6 +158,7 @@ xmatchlog =
 			kind = kind,
 			id = id,
 			nick = account.nickname or "",
+			email = account.email or "",
 			country = account.country or "",
 			steam = tonumber(info.sic),
 			banned = account.banned and true or false,

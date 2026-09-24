@@ -4,6 +4,7 @@ require "xconfig"
 require "xserver"
 require "xsocket"
 require "xadmin"
+require "xapi"
 require "xecho"
 
 local log = xlog("sich")
