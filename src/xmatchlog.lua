@@ -184,14 +184,20 @@ xmatchlog =
 local function write_status(status_path)
 	local online = {}
 	local rooms = {}
-	for _, server in pairs(servers or {}) do
+	local versions = {}
+	for tag, server in pairs(servers or {}) do
+		local count = 0
 		for _, client in pairs(server.clients) do
+			count = count + 1
 			table.insert(online, {
 				id = client.id,
 				nick = client.nickname or "",
 				room = client.session and client.session.real_name or nil,
+				-- the connection, for the site to look up its round-trip time; never published
+				addr = client.host and client.port and (client.host .. ":" .. client.port) or nil,
 			})
 		end
+		versions[tag] = count
 		for _, session in pairs(server.sessions) do
 			local players = {}
 			for _, client in pairs(session.clients) do
@@ -212,7 +218,7 @@ local function write_status(status_path)
 	if not file then
 		return
 	end
-	file:write(encode({t = xsocket.gettime(), boot = boot, online = online, rooms = rooms}), "\n")
+	file:write(encode({t = xsocket.gettime(), boot = boot, online = online, rooms = rooms, versions = versions}), "\n")
 	file:close()
 	os.rename(tmp, status_path)
 end

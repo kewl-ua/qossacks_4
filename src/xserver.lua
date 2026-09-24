@@ -330,6 +330,11 @@ local server_core = xclass
 			:transmit(remote)
 	end,
 	
+	-- clients report their ping regularly; keep it instead of logging it as unknown
+	[xcmd.PING] = function (self, remote, request)
+		remote.pingtime = request.pingtime or remote.pingtime
+	end,
+	
 	[xcmd.SERVER_PING_LOCK] = function (self, remote, request)
 	end,
 	
