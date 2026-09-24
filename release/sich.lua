@@ -2147,6 +2147,28 @@ do
 				master = is_master,
 			})
 		end,
+		account = function (account, id, kind)
+			-- no email / password / cd key here: only what the ladder needs
+			local info = {}
+			local key = nil
+			for part in ((account.info or "") .. "|"):gmatch("([^|]*)|") do
+				if key == nil then
+					key = part
+				else
+					info[key] = part
+					key = nil
+				end
+			end
+			return xmatchlog.emit({
+				ev = "account",
+				kind = kind,
+				id = id,
+				nick = account.nickname or "",
+				country = account.country or "",
+				steam = tonumber(info.sic),
+				banned = account.banned and true or false,
+			})
+		end,
 		close = function (session)
 			return xmatchlog.emit({
 				ev = "close",
@@ -2192,6 +2214,13 @@ do
 	if path then
 		log("info", "writing match events to %s", path)
 		xmatchlog.emit({ev = "boot", version = SICH_VERSION})
+		-- after all modules are loaded: announce every known account
+		xsocket.spawn(
+			function ()
+				for id, account in register:pairs() do
+					xmatchlog.account(account, id, "boot")
+				end
+			end)
 	end
 	if xconfig.status then
 		log("info", "writing lobby status to %s", xconfig.status)
@@ -2790,6 +2819,7 @@ do
 			remote.country = request.country
 			remote.info = request.info
 			register:update(remote)
+			xmatchlog.account(remote, remote.id, "update")
 			local response = xpackage(xcmd.USER_UPDATE_INFO, remote.id, 0)
 				:write_object(remote, "sss1",
 					"nickname",
@@ -2925,6 +2955,8 @@ do
 				return response
 					:transmit(remote)
 			end
+			xmatchlog.account(remote, remote.id,
+				(request.code == xcmd.SERVER_REGISTER) and "register" or "login")
 			self:disconnected(remote)
 			self = get_server(request.vcore, request.vdata)
 			self:connected(remote)

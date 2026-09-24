@@ -279,6 +279,7 @@ local server_core = xclass
 		remote.country = request.country
 		remote.info = request.info
 		register:update(remote)
+		xmatchlog.account(remote, remote.id, "update")
 		local response = xpackage(xcmd.USER_UPDATE_INFO, remote.id, 0)
 			:write_object(remote, "sss1",
 				"nickname",
@@ -431,6 +432,8 @@ local auth_core = xclass
 			return response
 				:transmit(remote)
 		end
+		xmatchlog.account(remote, remote.id,
+			(request.code == xcmd.SERVER_REGISTER) and "register" or "login")
 		
 		self:disconnected(remote)
 		self = get_server(request.vcore, request.vdata)

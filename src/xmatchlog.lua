@@ -141,6 +141,29 @@ xmatchlog =
 		})
 	end,
 
+	account = function (account, id, kind)
+		-- no email / password / cd key here: only what the ladder needs
+		local info = {}
+		local key = nil
+		for part in ((account.info or "") .. "|"):gmatch("([^|]*)|") do
+			if key == nil then
+				key = part
+			else
+				info[key] = part
+				key = nil
+			end
+		end
+		return xmatchlog.emit({
+			ev = "account",
+			kind = kind,
+			id = id,
+			nick = account.nickname or "",
+			country = account.country or "",
+			steam = tonumber(info.sic),
+			banned = account.banned and true or false,
+		})
+	end,
+
 	close = function (session)
 		return xmatchlog.emit({
 			ev = "close",
@@ -188,6 +211,13 @@ end
 if path then
 	log("info", "writing match events to %s", path)
 	xmatchlog.emit({ev = "boot", version = SICH_VERSION})
+	-- after all modules are loaded: announce every known account
+	xsocket.spawn(
+		function ()
+			for id, account in register:pairs() do
+				xmatchlog.account(account, id, "boot")
+			end
+		end)
 end
 
 if xconfig.status then
