@@ -83,6 +83,10 @@ end
 xmatchlog =
 {
 	enabled = (path ~= nil),
+	boot = boot,
+	encode = function (value)
+		return encode(value)
+	end,
 
 	emit = function (event)
 		if not path then

@@ -10,6 +10,7 @@ require "xclient"
 require "xclients"
 require "xsession"
 require "xmatchlog"
+require "xrecord"
 require "xversion"
 
 local log = xlog("xserver")
@@ -532,6 +533,7 @@ xserver = function (socket)
 		
 		local code = packet.code
 		local session = remote.session
+		xrecord.packet(session, packet)
 		if 0x0190 <= code and code <= 0x01F4 then
 			packet:dump_head(remote.log)
 			remote.server:process(remote, packet)

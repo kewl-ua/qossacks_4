@@ -6,6 +6,7 @@ require "xpackage"
 require "xparser"
 require "xsocket"
 require "xmatchlog"
+require "xrecord"
 
 local log = xlog("xsession")
 
@@ -50,6 +51,9 @@ xsession = xclass
 		remote:set_state("master", true)
 		
 		self.server.sessions[self.master_id] = self
+		xrecord.open(self)
+		xrecord.marker(self, {ev = "create", id = remote.id, nick = remote.nickname or "",
+			room = self.real_name, map = self.mapname, max_players = self.max_players})
 		xpackage(xcmd.USER_SESSION_CREATE, remote.id, 0)
 			:write_byte(remote.states)
 			:write_object(self, "4ss4b1",
@@ -97,6 +101,7 @@ xsession = xclass
 		self.clients[remote.id] = remote
 		remote.session = self
 		remote:set_state("session", true)
+		xrecord.marker(self, {ev = "join", id = remote.id, nick = remote.nickname or ""})
 		
 		return xpackage(xcmd.USER_SESSION_JOIN, remote.id, 0)
 			:write("41",
@@ -139,6 +144,7 @@ xsession = xclass
 		if self.locked and not self.closed then
 			xmatchlog.leave(self, remote, is_master)
 		end
+		xrecord.marker(self, {ev = "leave", id = remote.id, nick = remote.nickname or "", master = is_master})
 		remote.log("info", "leaving room: %s", self.real_name)
 		xpackage(xcmd.USER_SESSION_LEAVE, remote.id, 0)
 			:write_boolean(is_master)
@@ -152,10 +158,12 @@ xsession = xclass
 		if self:get_clients_count() == 0 then
 			remote.log("info", "destroying room: %s", self.real_name)
 			self.server.sessions[self.master_id] = nil
+			xrecord.finish(self)
 		end
 		
 		if new_master then
 			remote.log("info", "new session master: %s", new_master.nickname)
+			xrecord.marker(self, {ev = "master", id = new_master.id, nick = new_master.nickname or ""})
 			
 			new_master.score_updated = self.score_updated
 			xsocket.spawn(
@@ -205,6 +213,12 @@ xsession = xclass
 			client:set_state("played", true)
 		end
 		xmatchlog.start(self)
+		local players = {}
+		for _, client in pairs(self.clients) do
+			table.insert(players, {id = client.id, nick = client.nickname or "", cid = client.cid,
+				team = client.team, color = client.color})
+		end
+		xrecord.marker(self, {ev = "lock", id = remote.id, map = self.mapname, players = players})
 		
 		local count = 0
 		for _ in pairs(self.clients) do
@@ -269,6 +283,7 @@ xsession = xclass
 		remote.log("info", "closing room: %s", self.real_name)
 		self.closed = true
 		xmatchlog.close(self)
+		xrecord.marker(self, {ev = "close", id = remote.id})
 		return xpackage(xcmd.USER_SESSION_CLOSE, remote.id, 0)
 			:write("t", xsocket.gettime())
 			:write_objects(self.clients, "44",
