@@ -163,6 +163,9 @@ xmatchlog =
 			steam = tonumber(info.sic),
 			banned = account.banned and true or false,
 			pwchanged = password_changed or nil,
+			-- only for a live client (register / login): the site resolves it to a
+			-- country and does not keep the address
+			ip = account.host,
 		})
 	end,
 
