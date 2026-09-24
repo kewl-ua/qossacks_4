@@ -5,6 +5,7 @@ require "xclients"
 require "xpackage"
 require "xparser"
 require "xsocket"
+require "xmatchlog"
 
 local log = xlog("xsession")
 
@@ -135,6 +136,9 @@ xsession = xclass
 			end
 		end
 		
+		if self.locked and not self.closed then
+			xmatchlog.leave(self, remote, is_master)
+		end
 		remote.log("info", "leaving room: %s", self.real_name)
 		xpackage(xcmd.USER_SESSION_LEAVE, remote.id, 0)
 			:write_boolean(is_master)
@@ -200,6 +204,7 @@ xsession = xclass
 			end
 			client:set_state("played", true)
 		end
+		xmatchlog.start(self)
 		
 		local count = 0
 		for _ in pairs(self.clients) do
@@ -263,6 +268,7 @@ xsession = xclass
 	close = function (self, remote)
 		remote.log("info", "closing room: %s", self.real_name)
 		self.closed = true
+		xmatchlog.close(self)
 		return xpackage(xcmd.USER_SESSION_CLOSE, remote.id, 0)
 			:write("t", xsocket.gettime())
 			:write_objects(self.clients, "44",
@@ -301,6 +307,7 @@ xsession = xclass
 		if not parser_s then
 			return
 		end
+		self.last_datasync = parser_s
 		for str in parser_s:gmatch("[^|]+") do
 			local parts = {}
 			for sub in str:gmatch("[^,]+") do
@@ -311,6 +318,7 @@ xsession = xclass
 				local client = self.clients[id]
 				if client then
 					client.cid = cid
+					client.color = color
 				end
 			end
 		end

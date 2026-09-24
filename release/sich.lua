@@ -2021,6 +2021,145 @@ do
 	}
 end
 
+-- // xmatchlog // --
+do
+	-- QLadder: append match events as JSON lines for the ladder web app.
+	-- Bytes >= 0x80 are written as \u00XX (latin-1), the reader restores
+	-- the original bytes and decodes them (utf-8 or cp1251).
+	local log = xlog("xmatchlog")
+	local path = xconfig.matchlog
+	local boot = os.time()
+	local escapes =
+	{
+		['"'] = '\\"',
+		["\\"] = "\\\\",
+		["\n"] = "\\n",
+		["\r"] = "\\r",
+		["\t"] = "\\t",
+	}
+	local function encode_string(str)
+		return '"' .. str:gsub('[%z\1-\31"\\\128-\255]',
+			function (c)
+				return escapes[c] or ("\\u%04x"):format(c:byte())
+			end) .. '"'
+	end
+	local encode
+	local function encode_table(tbl)
+		if tbl[1] ~= nil or next(tbl) == nil then
+			local items = {}
+			for _, value in ipairs(tbl) do
+				table.insert(items, encode(value))
+			end
+			return "[" .. table.concat(items, ",") .. "]"
+		end
+		local items = {}
+		for key, value in pairs(tbl) do
+			table.insert(items, encode_string(tostring(key)) .. ":" .. encode(value))
+		end
+		return "{" .. table.concat(items, ",") .. "}"
+	end
+	encode = function (value)
+		local kind = type(value)
+		if kind == "string" then
+			return encode_string(value)
+		elseif kind == "number" then
+			if value ~= value or value == math.huge or value == -math.huge then
+				return "null"
+			end
+			return ("%.14g"):format(value)
+		elseif kind == "boolean" then
+			return tostring(value)
+		elseif kind == "table" then
+			return encode_table(value)
+		end
+		return "null"
+	end
+	local function parser_tree(parser)
+		local children = {}
+		for _, node in parser:pairs() do
+			table.insert(children, parser_tree(node))
+		end
+		return {k = parser.key, v = parser.value, c = children}
+	end
+	local function player_info(client)
+		return
+		{
+			id = client.id,
+			nick = client.nickname or "",
+			cid = client.cid,
+			team = client.team,
+			color = client.color,
+		}
+	end
+	xmatchlog =
+	{
+		enabled = (path ~= nil),
+		emit = function (event)
+			if not path then
+				return
+			end
+			event.boot = boot
+			event.t = xsocket.gettime()
+			local file, err = io.open(path, "ab")
+			if not file then
+				return log("error", "can not open %s: %s", path, tostring(err))
+			end
+			file:write(encode(event), "\n")
+			file:close()
+		end,
+		start = function (session)
+			local players = {}
+			for _, client in pairs(session.clients) do
+				table.insert(players, player_info(client))
+			end
+			return xmatchlog.emit({
+				ev = "start",
+				sid = session.session_id,
+				room = session.real_name,
+				gamename = session.gamename,
+				map = session.mapname,
+				money = session.money,
+				fog = session.fog_of_war,
+				bf = session.battlefield,
+				max_players = session.max_players,
+				master = session.master_id,
+				sync = session.last_datasync,
+				vcore = session.server.vcore,
+				vdata = session.server.vdata,
+				players = players,
+			})
+		end,
+		result = function (session, remote, request)
+			return xmatchlog.emit({
+				ev = "result",
+				sid = session.session_id,
+				from = remote.id,
+				parser_id = request.parser_id,
+				parser = parser_tree(request.parser),
+			})
+		end,
+		leave = function (session, remote, is_master)
+			return xmatchlog.emit({
+				ev = "leave",
+				sid = session.session_id,
+				id = remote.id,
+				nick = remote.nickname or "",
+				master = is_master,
+			})
+		end,
+		close = function (session)
+			return xmatchlog.emit({
+				ev = "close",
+				sid = session.session_id,
+			})
+		end,
+	}
+	if path then
+		log("info", "writing match events to %s", path)
+		xmatchlog.emit({ev = "boot", version = SICH_VERSION})
+	end
+end
+
 -- // xsession // --
 do
 	local log = xlog("xsession")
@@ -2134,6 +2273,9 @@ do
 					end
 				end
 			end
+			if self.locked and not self.closed then
+				xmatchlog.leave(self, remote, is_master)
+			end
 			remote.log("info", "leaving room: %s", self.real_name)
 			xpackage(xcmd.USER_SESSION_LEAVE, remote.id, 0)
 				:write_boolean(is_master)
@@ -2190,6 +2332,7 @@ do
 				end
 				client:set_state("played", true)
 			end
+			xmatchlog.start(self)
 			local count = 0
 			for _ in pairs(self.clients) do
 				count = count + 1
@@ -2248,6 +2391,7 @@ do
 		close = function (self, remote)
 			remote.log("info", "closing room: %s", self.real_name)
 			self.closed = true
+			xmatchlog.close(self)
 			return xpackage(xcmd.USER_SESSION_CLOSE, remote.id, 0)
 				:write("t", xsocket.gettime())
 				:write_objects(self.clients, "44",
@@ -2283,6 +2427,7 @@ do
 			if not parser_s then
 				return
 			end
+			self.last_datasync = parser_s
 			for str in parser_s:gmatch("[^|]+") do
 				local parts = {}
 				for sub in str:gmatch("[^,]+") do
@@ -2293,6 +2438,7 @@ do
 					local client = self.clients[id]
 					if client then
 						client.cid = cid
+						client.color = color
 					end
 				end
 			end
@@ -2646,6 +2792,9 @@ do
 		[xcmd.LAN_PARSER] = function (self, remote, request)
 			if request.parser_id == xconst.parser.LAN_GAME_SESSION_RESULTS
 			or request.parser_id == xconst.parser.LAN_GAME_SURRENDER_CONFIRM then
+				if remote.session then
+					xmatchlog.result(remote.session, remote, request)
+				end
 				return self:master_session_action("results", remote, request)
 			end
 		end,

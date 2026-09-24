@@ -9,6 +9,7 @@ require "xregister"
 require "xclient"
 require "xclients"
 require "xsession"
+require "xmatchlog"
 require "xversion"
 
 local log = xlog("xserver")
@@ -336,6 +337,9 @@ local server_core = xclass
 	[xcmd.LAN_PARSER] = function (self, remote, request)
 		if request.parser_id == xconst.parser.LAN_GAME_SESSION_RESULTS
 		or request.parser_id == xconst.parser.LAN_GAME_SURRENDER_CONFIRM then
+			if remote.session then
+				xmatchlog.result(remote.session, remote, request)
+			end
 			return self:master_session_action("results", remote, request)
 		end
 	end,
