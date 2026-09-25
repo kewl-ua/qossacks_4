@@ -532,6 +532,19 @@ xserver = function (socket)
 	{
 		[xcmd.LAN_PARSER] = true,
 	}
+	-- QLadder mod statistics (mod/PROTOCOL.md): recorded, never relayed to the players
+	local QLADDER_STATS = 7700
+	local function is_mod_report(packet)
+		if packet.code ~= xcmd.LAN_PARSER then
+			return false
+		end
+		local b = packet:get_buffer()
+		if #b < 4 then
+			return false
+		end
+		local b1, b2, b3, b4 = b:byte(1, 4)
+		return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216 == QLADDER_STATS
+	end
 	while true do
 		local packet = xpacket:receive(socket)
 		if not packet then
@@ -544,6 +557,8 @@ xserver = function (socket)
 		if 0x0190 <= code and code <= 0x01F4 then
 			packet:dump_head(remote.log)
 			remote.server:process(remote, packet)
+		elseif session and is_mod_report(packet) then
+			remote.log("debug", "qladder mod report, %d bytes", #packet:get_buffer())
 		elseif session then
 			if server_process[code] then
 				remote.server:process(remote, packet)
