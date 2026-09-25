@@ -2523,7 +2523,9 @@ do
 			for _, info in ipairs(request.clients) do
 				local client = self.clients[info.id]
 				if client then
-					client.team = info.team
+					-- the lock carries the lobby team (LanClSetMyTeam): a placeholder in regular rooms
+					-- (the creator gets 13); the room datasync has the team picked in the game
+					client.team = client.room_team or info.team
 				end
 			end
 			for _, client in pairs(self.clients) do
@@ -2647,6 +2649,7 @@ do
 					if client then
 						client.cid = cid
 						client.color = color
+						client.room_team = team
 					end
 				end
 			end
