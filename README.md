@@ -13,6 +13,7 @@ stock game. Each addition is off until its option is set in `config.store`.
 | `status = "/path/status.json"` | Who is online and which rooms exist, rewritten every 5 s. |
 | `recordings = "/path/dir"` | Every packet of every started room, in the QLREC1 format; packets Sich cannot handle go to `unhandled_<boot>.rec`. Private messages are never recorded. |
 | `api = { port = 31524, token = "<32+ characters>" }` | A local line protocol to create accounts and reset passwords from a website. Listens on 127.0.0.1 unless `api.host` says otherwise. |
+| `accounts = { managed = true, message = "..." }` | Accounts and passwords come from the `api` only. Registering from the game gets error 6 ("Incorrect registration data"); a password changed in the game's profile is ignored, and the player gets `message`. |
 
 Other changes:
 
@@ -21,6 +22,9 @@ Other changes:
 - Reports of a statistics mod (LAN parser 7700) are recorded and never
   relayed to the players.
 - `PING` from clients is kept as their ping time.
+- The account store is written to a temporary file and renamed, so a crash
+  or a full disk cannot truncate it.
+- A password reminder request no longer writes the password to the log.
 
 The protocol, the room data and the match stream these features read are
 documented in [cossacks_3_net_spec](https://github.com/kewl-ua/cossacks_3_net_spec),

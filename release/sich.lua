@@ -3,7 +3,7 @@
 -- Cossacks 3 lua server
 --
 
-SICH_VERSION = "Sich v0.2.9"
+SICH_VERSION = "qossacks_4 0.1 (Sich v0.2.9)"
 
 -- // xclass // --
 do
@@ -110,13 +110,34 @@ do
 			name = path:format(name)
 			log("debug", "saving %q", name)
 			local str = serialize(data)
-			local file, msg = io.open(name, "w")
+			-- write a new file and rename it over the old one: a crash or a full disk
+			-- in the middle of a write must not leave a truncated store
+			local tmp = name .. ".tmp"
+			local file, msg = io.open(tmp, "w")
 			if not file then
 				log("error", msg)
 				return false
 			end
-			file:write("return ", str, "\n")
-			file:close()
+			local ok, err = file:write("return ", str, "\n")
+			if ok then
+				ok, err = file:close()
+			else
+				file:close()
+			end
+			if not ok then
+				log("error", "saving %q: %s", name, tostring(err))
+				os.remove(tmp)
+				return false
+			end
+			if not os.rename(tmp, name) then
+				-- Windows does not rename over an existing file
+				os.remove(name)
+				ok, err = os.rename(tmp, name)
+				if not ok then
+					log("error", "saving %q: %s", name, tostring(err))
+					return false
+				end
+			end
 			return true
 		end,
 	}
@@ -2716,6 +2737,11 @@ end
 -- // xserver // --
 do
 	local log = xlog("xserver")
+	-- accounts.managed: accounts and passwords come from the local API (a website) only;
+	-- the game can neither register nor change a password
+	local function managed_accounts()
+		return xconfig.accounts and xconfig.accounts.managed
+	end
 	local custom_core = xclass
 	{
 		__parent = xclients,
@@ -2951,7 +2977,18 @@ do
 		[xcmd.SERVER_UPDATE_INFO] = function (self, remote, request)
 			remote.log("info", "updating client info")
 			local password_changed = (remote.password ~= request.password)
-			remote.password = request.password
+			if password_changed and managed_accounts() then
+				-- the game sends its stored password with every profile update; keep ours
+				remote.log("info", "password change from the game refused, accounts are managed")
+				password_changed = false
+				if xconfig.accounts.message then
+					xpackage(xcmd.USER_MESSAGE, 0, 0)
+						:write("s", xconfig.accounts.message)
+						:transmit(remote)
+				end
+			else
+				remote.password = request.password
+			end
 			remote.nickname = request.nickname
 			remote.country = request.country
 			remote.info = request.info
@@ -3059,6 +3096,10 @@ do
 			if request.code == xcmd.SERVER_REGISTER then
 				-- 1 This e-mail is already in use
 				-- 6 Incorrect registration data
+				if managed_accounts() then
+					remote.log("info", "registration from the game refused, accounts are managed: %s", request.email)
+					return 6
+				end
 				if not register:new(remote, request) then
 					remote.log("error", "email is already in use: %s", request.email)
 					return 1
@@ -3162,7 +3203,8 @@ do
 			if not id then
 				return
 			end
-			return remote.log("info", "user #%d forgot password, email=%s, password=%s", id, account.email, account.password)
+			-- never the password itself: logs are read by more people than the account store
+			return remote.log("info", "user #%d asked for a password reminder", id)
 		end,
 	}
 	auth_server = auth_core()
