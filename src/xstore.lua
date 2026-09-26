@@ -84,13 +84,34 @@ xstore =
 		name = path:format(name)
 		log("debug", "saving %q", name)
 		local str = serialize(data)
-		local file, msg = io.open(name, "w")
+		-- write a new file and rename it over the old one: a crash or a full disk
+		-- in the middle of a write must not leave a truncated store
+		local tmp = name .. ".tmp"
+		local file, msg = io.open(tmp, "w")
 		if not file then
 			log("error", msg)
 			return false
 		end
-		file:write("return ", str, "\n")
-		file:close()
+		local ok, err = file:write("return ", str, "\n")
+		if ok then
+			ok, err = file:close()
+		else
+			file:close()
+		end
+		if not ok then
+			log("error", "saving %q: %s", name, tostring(err))
+			os.remove(tmp)
+			return false
+		end
+		if not os.rename(tmp, name) then
+			-- Windows does not rename over an existing file
+			os.remove(name)
+			ok, err = os.rename(tmp, name)
+			if not ok then
+				log("error", "saving %q: %s", name, tostring(err))
+				return false
+			end
+		end
 		return true
 	end,
 }
