@@ -3684,8 +3684,22 @@ do
 	-- Reply: "ok \t ..." or "err \t code".
 	--   create EMAIL NICKNAME PASSWORD STEAM_ACCOUNT_ID -> ok ID
 	--   passwd ID PASSWORD                             -> ok
+	--   pause MASTER_ID [FROM_ID]                      -> ok
+	--     toggles the pause of a running match: the room's host gets the record a
+	--     player's game sends when its pause key is pressed (a GUI record, ReadPause)
 	local log = xlog("xapi")
 	local MAX_LINE = 1024
+	-- 00 04: a record of the GUI machine (menu.aix); section 66 = ReadPause; its Boolean; 01 end.
+	-- The host toggles its pause whatever the Boolean says, and tells everyone.
+	local PAUSE_RECORD = "\0\4\66\0\0\1"
+	local function find_session(master_id)
+		for _, server in pairs(servers or {}) do
+			if server.sessions[master_id] then
+				return server.sessions[master_id]
+			end
+		end
+		return nil
+	end
 	local function valid_nickname(nick)
 		return #nick >= 4 and #nick <= 16 and not nick:find("[^%w%(%)%+%-_%.%[%]]")
 	end
@@ -3761,6 +3775,23 @@ do
 			end
 			register:save()
 			log("info", "password changed from web: #%d %s", id, account.nickname or "")
+			return "ok"
+		end,
+		pause = function (master_id, from_id)
+			local session = find_session(tonumber(master_id) or -1)
+			local host = session and session.clients[session.master_id]
+			if not host then
+				return "err\tnot_found"
+			elseif not session.locked then
+				return "err\tnot_started"
+			end
+			local from = tonumber(from_id) or 0
+			xrecord.marker(session, {ev = "server_pause", id = from})
+			local packet = xpackage(xcmd.LAN_RECORD, from, session.master_id)
+				:write_buffer(PAUSE_RECORD)
+			-- ops run under pcall, and a socket send may yield: send from a coroutine of its own
+			xsocket.spawn(function () packet:transmit(host) end)
+			log("info", "pause toggled from the api: %s", session.real_name)
 			return "ok"
 		end,
 	}
