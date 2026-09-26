@@ -7,6 +7,28 @@ v0.2.9 by 3skcassoc, extended for a ladder site. It runs
 Everything Sich does works as before, and the players need nothing but the
 stock game. Each addition is off until its option is set in `config.store`.
 
+```mermaid
+flowchart LR
+    G["Cossacks 3<br/>(players)"] <-->|"TCP 31523"| CORE
+    subgraph Q["qossacks_4"]
+        CORE["lobby core<br/>(Sich)"]
+        LOG["xmatchlog"]
+        REC["xrecord"]
+        API["xapi"]
+        CORE --> LOG
+        CORE --> REC
+        API --> CORE
+    end
+    LOG --> J[("matches.jsonl<br/>status.json")]
+    REC --> R[("recordings/*.rec")]
+    W["a website"] -->|"local API"| API
+    J -.-> W
+    R -.-> W
+```
+
+How it works inside, with diagrams (modules, the path of a packet, a match
+and its files, accounts): [docs/architecture.md](docs/architecture.md).
+
 | Option | What it does |
 |---|---|
 | `matchlog = "/path/matches.jsonl"` | Lobby and match events as JSON lines: matches with players, nations, teams and room settings; results; leavers; accounts (no passwords or cd keys). |
