@@ -3686,7 +3686,9 @@ do
 	--   passwd ID PASSWORD                             -> ok
 	--   pause MASTER_ID [FROM_ID]                      -> ok
 	--     toggles the pause of a running match: the room's host gets the record a
-	--     player's game sends when its pause key is pressed (a GUI record, ReadPause)
+	--     player's game sends when its pause key is pressed (a GUI record, ReadPause).
+	--     The host takes it only from a player of its room (a real match, 2026-09-26:
+	--     from id 0 it was ignored). FROM_ID defaults to a player other than the host.
 	local log = xlog("xapi")
 	local MAX_LINE = 1024
 	-- 00 04: a record of the GUI machine (menu.aix); section 66 = ReadPause; its Boolean; 01 end.
@@ -3785,7 +3787,17 @@ do
 			elseif not session.locked then
 				return "err\tnot_started"
 			end
-			local from = tonumber(from_id) or 0
+			local from = tonumber(from_id)
+			if not from then
+				for id in pairs(session.clients) do
+					if id ~= session.master_id then
+						from = id
+						break
+					end
+				end
+			end
+			-- the host alone (a match against computers): untested whether it takes its own id
+			from = from or session.master_id
 			xrecord.marker(session, {ev = "server_pause", id = from})
 			local packet = xpackage(xcmd.LAN_RECORD, from, session.master_id)
 				:write_buffer(PAUSE_RECORD)
