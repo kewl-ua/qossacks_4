@@ -2415,6 +2415,16 @@ do
 	-- whatever the Boolean says, and broadcasts the record with its new state (see xapi.lua).
 	local PAUSE_ON, PAUSE_OFF = "\0\4\66\0\1\1", "\0\4\66\0\0\1"
 	local PAUSE_WAIT = 3 -- seconds a pause request waits for the host's answer before another may go
+	-- The save: the GUI machine's section 70, ReadSave: the save's name, the replay's name, the map's
+	-- name (str16: u16 length + bytes), 01 end. The game switched the online saves off, but a machine
+	-- that reads the record still saves the match to its profile under that name (menu.inc/readsave.inc).
+	local SAVE_INTERVAL = 30 -- seconds between two saves of a match
+	local function str16(text)
+		return string.char(#text % 256, math.floor(#text / 256)) .. text
+	end
+	local function save_record(name, map)
+		return "\0\4\70\0" .. str16(name) .. str16("replay.autosave") .. str16(map or "") .. "\1"
+	end
 	local function split_tabs(line)
 		local fields = {}
 		for field in (line .. "\t"):gmatch("([^\t]*)\t") do
@@ -2509,7 +2519,7 @@ do
 	end
 	local TEXTS = {
 		en = {
-			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams, !remake - replay the match (all agree), !pause / !unpause",
+			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams, !remake - replay the match (all agree), !pause / !unpause, !save",
 			site = "Ladder, matches and statistics: %s",
 			unavailable = "The ladder is not available right now.",
 			no_games = "%s: no games on the ladder yet.",
@@ -2545,9 +2555,12 @@ do
 			pause_limit = "No pauses left: %d a match.",
 			pause = "%s pauses the match (pause %d of %d). !unpause resumes it.",
 			unpause = "%s resumes the match.",
+			save_match = "!save works in a running match.",
+			save_wait = "The match was saved a moment ago.",
+			save = "%s saves the match: \"%s\" (in the saved games of every player).",
 		},
 		ru = {
-			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все), !pause / !unpause",
+			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все), !pause / !unpause, !save",
 			site = "Ладдер, матчи и статистика: %s",
 			unavailable = "Ладдер сейчас недоступен.",
 			no_games = "%s: на ладдере пока нет игр.",
@@ -2583,6 +2596,9 @@ do
 			pause_limit = "Лимит пауз исчерпан: %d за матч.",
 			pause = "%s ставит паузу (%d из %d). Снять: !unpause",
 			unpause = "%s снимает паузу.",
+			save_match = "!save работает в идущем матче.",
+			save_wait = "Матч только что сохранён.",
+			save = "%s сохраняет матч: «%s» (в сохранениях у каждого игрока).",
 		},
 	}
 	for key, text in pairs(TEXTS.ru) do
@@ -2887,6 +2903,37 @@ do
 	end
 	commands.unpause = function (remote, arg, in_room)
 		return toggle_pause(remote, in_room, false)
+	end
+	-- a save of the match on every machine: the host gets the record from a player, like one its
+	-- own WriteSave would read; the others get it from the host, as the game broadcasts it
+	commands.save = function (remote, arg, in_room)
+		local session = remote.session
+		local host = session and session.clients[session.master_id]
+		if not session or not session.locked or not host then
+			return reply(remote, TAG .. T.save_match, in_room)
+		elseif session.save_time and xsocket.gettime() - session.save_time < SAVE_INTERVAL then
+			return reply(remote, TAG .. T.save_wait, in_room)
+		end
+		session.save_time = xsocket.gettime()
+		local minute = math.floor((session.save_time - (session.lock_time or session.save_time)) / 60)
+		local name = ("qladder_%s_%dmin"):format(os.date("%Y%m%d_%H%M"), minute)
+		local record = save_record(name, session.mapname)
+		local from = remote.id
+		if from == session.master_id then
+			for id in pairs(session.clients) do
+				if id ~= session.master_id then
+					from = id
+					break
+				end
+			end
+		end
+		for id, client in pairs(session.clients) do
+			table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, id == session.master_id and from or session.master_id, id)
+				:write_buffer(record), to = client})
+		end
+		xrecord.marker(session, {ev = "chat_save", id = remote.id, name = name})
+		log("info", "save %s: %s", name, session.real_name or "?")
+		announce(session, "save", remote.nickname or "?", name)
 	end
 	-- how the game shows server messages: both kinds of message, ASCII and Cyrillic in both encodings
 	commands.test = function (remote, arg, in_room)
