@@ -7,6 +7,7 @@ require "xparser"
 require "xsocket"
 require "xmatchlog"
 require "xrecord"
+require "xcommands"
 
 local log = xlog("xsession")
 
@@ -80,6 +81,9 @@ xsession = xclass
 	end,
 	
 	message = function (self, remote, request)
+		if xcommands.handle(remote, request.message, true) then
+			return -- a chat command: answered, not passed on
+		end
 		return xpackage(xcmd.USER_SESSION_MSG, request.id_from, request.id_to)
 			:write("s", request.message)
 			:session_dispatch(remote)

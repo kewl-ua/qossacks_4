@@ -11,6 +11,7 @@ require "xclients"
 require "xsession"
 require "xmatchlog"
 require "xrecord"
+require "xcommands"
 require "xversion"
 
 local log = xlog("xserver")
@@ -187,6 +188,9 @@ local server_core = xclass
 	end,
 	
 	[xcmd.SERVER_MESSAGE] = function (self, remote, request)
+		if xcommands.handle(remote, request.message, false) then
+			return -- a chat command: answered, not passed on
+		end
 		xpackage(xcmd.USER_MESSAGE, request.id_from, request.id_to)
 			:write("s", request.message)
 			:dispatch(remote)

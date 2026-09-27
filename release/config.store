@@ -48,6 +48,7 @@ return {
 	-- status = "/var/lib/ladder/events/status.json",
 	-- recordings = "/var/lib/ladder/recordings",
 	-- api = { host = "127.0.0.1", port = 31524, token = "<32 or more characters>" },
+	-- commands = { ladder = "/var/lib/ladder/ladder.tsv", site = "https://example.com" }, -- chat commands (!help)
 	-- accounts = {
 	-- 	managed = true, -- accounts and passwords only through the api
 	-- 	message = "Passwords are set on the website", -- to a player who changes it in the game
