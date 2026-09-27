@@ -2556,6 +2556,7 @@ do
 			pause = "%s asks the host for a pause (%d of %d). !unpause resumes it.",
 			unpause = "%s asks the host to resume.",
 			save_match = "!save works in a running match.",
+			alone = "Alone in a match the server cannot do this: the game takes it only from another player. Use the pause key.",
 			save_wait = "The match was saved a moment ago.",
 			save = "%s asks every game to save the match as \"%s\" (the saved games).",
 		},
@@ -2597,6 +2598,7 @@ do
 			pause = "%s просит у хоста паузу (%d из %d). Снять: !unpause",
 			unpause = "%s просит хоста снять паузу.",
 			save_match = "!save работает в идущем матче.",
+			alone = "В матче без других игроков сервер так не может: игра принимает это только от другого игрока. Пауза — клавишей.",
 			save_wait = "Матч только что сохранён.",
 			save = "%s просит все игры сохранить матч как «%s» (в сохранениях).",
 		},
@@ -2855,9 +2857,9 @@ do
 		log("info", "remake agreed: %s", session.real_name or "?")
 		announce(session, "remake_done")
 	end
-	-- Who a record to the host comes from. The host takes a GUI record from another player of its room
-	-- (a live match, 2026-09-26) and drops its own id (match #9, 2026-09-27: alone against computers)
-	-- and 0. For the host's own command, another player; alone, the bot (untested).
+	-- Who a record to the host comes from. The host takes a GUI record only from another player of its
+	-- room (a live match, 2026-09-26); it drops its own id (match #9), the bot's (match #10) and 0. For
+	-- the host's own command, another player; nil when the host is alone.
 	local function record_sender(session, remote)
 		if remote.id ~= session.master_id then
 			return remote.id
@@ -2867,7 +2869,7 @@ do
 				return id
 			end
 		end
-		return bot and bot.id or remote.id
+		return nil
 	end
 	-- the pause: the command sends the host the record a player's pause key sends; the state comes
 	-- from the host's broadcasts (xcommands.host_record), so a toggle never goes the wrong way
@@ -2892,6 +2894,9 @@ do
 			return reply(remote, TAG .. T.pause_limit:format(PAUSES), in_room)
 		end
 		local from = record_sender(session, remote)
+		if not from then
+			return reply(remote, TAG .. T.alone, in_room)
+		end
 		session.pause_sent = xsocket.gettime()
 		xrecord.marker(session, {ev = want and "chat_pause" or "chat_unpause", id = remote.id})
 		table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, from, session.master_id)
@@ -2919,11 +2924,14 @@ do
 		elseif session.save_time and xsocket.gettime() - session.save_time < SAVE_INTERVAL then
 			return reply(remote, TAG .. T.save_wait, in_room)
 		end
+		local from = record_sender(session, remote)
+		if not from then
+			return reply(remote, TAG .. T.alone, in_room)
+		end
 		session.save_time = xsocket.gettime()
 		local minute = math.floor((session.save_time - (session.lock_time or session.save_time)) / 60)
 		local name = ("qladder_%s_%dmin"):format(os.date("%Y%m%d_%H%M"), minute)
 		local record = save_record(name, session.mapname)
-		local from = record_sender(session, remote)
 		for id, client in pairs(session.clients) do
 			table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, id == session.master_id and from or session.master_id, id)
 				:write_buffer(record), to = client})
