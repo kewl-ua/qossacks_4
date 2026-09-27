@@ -116,7 +116,14 @@ local server_core = xclass
 	end,
 	
 	get_server_clients = function (self, response)
+		local clients = {}
 		for _, client in pairs(self.clients) do
+			table.insert(clients, client)
+		end
+		if xcommands.bot then
+			table.insert(clients, xcommands.bot) -- the chat commands' bot: listed, never sent to
+		end
+		for _, client in ipairs(clients) do
 			response
 				:write_object(client, "41sss",
 					"id",
@@ -159,10 +166,10 @@ local server_core = xclass
 	end,
 	
 	[xcmd.SERVER_CLIENTINFO] = function (self, remote, request)
-		if not self:check_client(request.id) then
+		local client = xcommands.for_bot(request.id) and xcommands.bot or self.clients[request.id]
+		if not client and not self:check_client(request.id) then
 			return
 		end
-		local client = self.clients[request.id]
 		local response = xpackage(xcmd.USER_CLIENTINFO, client.id, remote.id)
 			:write_object(client, "41ss444ts",
 				"id",
@@ -188,7 +195,7 @@ local server_core = xclass
 	end,
 	
 	[xcmd.SERVER_MESSAGE] = function (self, remote, request)
-		if xcommands.handle(remote, request.message, false) then
+		if xcommands.handle(remote, request.message, false, xcommands.for_bot(request.id_to)) then
 			return -- a chat command: answered, not passed on
 		end
 		xpackage(xcmd.USER_MESSAGE, request.id_from, request.id_to)

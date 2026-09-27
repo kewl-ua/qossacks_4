@@ -2395,6 +2395,16 @@ do
 	local log = xlog("xcommands")
 	local config = xconfig.commands
 	local site = config and config.site or ""
+	-- A player that is not there: it sits in every client's online list, the
+	-- answers come from it (the game shows them as its messages), and a private
+	-- message to it is a command even without "!". commands.bot = false turns it
+	-- off; commands.bot = { id = ..., nick = "..." } changes it.
+	local bot = nil
+	if config and config.bot ~= false then
+		local b = type(config.bot) == "table" and config.bot or {}
+		bot = {id = b.id or 999999999, nickname = b.nick or "QLadder", states = 0, country = "", info = "",
+			score = 0, games_played = 0, games_win = 0, last_game = 0, pingtime = 0}
+	end
 	local MIN_INTERVAL = 1.0 -- seconds between two commands of a client
 	local function split_tabs(line)
 		local fields = {}
@@ -2644,7 +2654,12 @@ do
 	{
 		enabled = (config ~= nil),
 		-- true when the message was a command (answered here, not passed on)
-		handle = function (remote, message, in_room)
+		bot = bot,
+		-- a private message to the bot: whatever it says goes to handle()
+		for_bot = function (id)
+			return bot ~= nil and id == bot.id
+		end,
+		handle = function (remote, message, in_room, to_bot)
 			if not config or type(message) ~= "string" then
 				return false
 			end
@@ -2654,13 +2669,20 @@ do
 			if not prefix then
 				prefix, text = "", message
 			end
-			if text:sub(1, 1) ~= "!" then
+			if text:sub(1, 1) ~= "!" and not to_bot then
 				return false
 			end
 			local name, arg = text:match("^!(%a+)%s*(.-)%s*$")
+			if to_bot and not name then
+				name, arg = text:match("^!?(%a+)%s*(.-)%s*$") -- to the bot, "top" is "!top"
+			end
 			local command = name and commands[name:lower()]
 			if not command then
-				return false -- "!!!" and the like are just chat
+				if to_bot then
+					name, command, arg = "help", commands.help, "" -- the bot answers anything it does not know with the list
+				else
+					return false -- "!!!" and the like are just chat
+				end
 			end
 			-- the player's game language: Russian answers for ru and uk, English for the rest
 			local lang = prefix:match("(%a%a)\7$") or "en"
@@ -2681,7 +2703,7 @@ do
 				lines = {{xcmd.USER_MESSAGE, TAG .. T.failed}}
 			end
 			for _, line in ipairs(lines) do
-				xpackage(line[1], 0, remote.id)
+				xpackage(line[1], bot and bot.id or 0, remote.id)
 					:write("s", prefix .. line[2])
 					:transmit(remote)
 			end
@@ -3147,7 +3169,14 @@ do
 			return remote.session[action](remote.session, remote, request)
 		end,
 		get_server_clients = function (self, response)
+			local clients = {}
 			for _, client in pairs(self.clients) do
+				table.insert(clients, client)
+			end
+			if xcommands.bot then
+				table.insert(clients, xcommands.bot) -- the chat commands' bot: listed, never sent to
+			end
+			for _, client in ipairs(clients) do
 				response
 					:write_object(client, "41sss",
 						"id",
@@ -3188,10 +3217,10 @@ do
 				:write_dword(0)
 		end,
 		[xcmd.SERVER_CLIENTINFO] = function (self, remote, request)
-			if not self:check_client(request.id) then
+			local client = xcommands.for_bot(request.id) and xcommands.bot or self.clients[request.id]
+			if not client and not self:check_client(request.id) then
 				return
 			end
-			local client = self.clients[request.id]
 			local response = xpackage(xcmd.USER_CLIENTINFO, client.id, remote.id)
 				:write_object(client, "41ss444ts",
 					"id",
@@ -3215,7 +3244,7 @@ do
 			return self:session_action("message", remote, request)
 		end,
 		[xcmd.SERVER_MESSAGE] = function (self, remote, request)
-			if xcommands.handle(remote, request.message, false) then
+			if xcommands.handle(remote, request.message, false, xcommands.for_bot(request.id_to)) then
 				return -- a chat command: answered, not passed on
 			end
 			xpackage(xcmd.USER_MESSAGE, request.id_from, request.id_to)
