@@ -209,10 +209,19 @@ xcommands =
 
 	-- true when the message was a command (answered here, not passed on)
 	handle = function (remote, message, in_room)
-		if not config or type(message) ~= "string" or message:sub(1, 1) ~= "!" then
+		if not config or type(message) ~= "string" then
 			return false
 		end
-		local name, arg = message:match("^!(%a+)%s*(.-)%s*$")
+		-- the game sends "<lang>\7<text>" ("ru\7!top"), in a match's console "<mode>|<lang>\7<text>";
+		-- it shows an incoming message by the same format (transliterating ru/uk for other languages)
+		local prefix, text = message:match("^(.-\7)(.*)$")
+		if not prefix then
+			prefix, text = "", message
+		end
+		if text:sub(1, 1) ~= "!" then
+			return false
+		end
+		local name, arg = text:match("^!(%a+)%s*(.-)%s*$")
 		local command = name and commands[name:lower()]
 		if not command then
 			return false -- "!!!" and the like are just chat
@@ -233,7 +242,7 @@ xcommands =
 		end
 		for _, line in ipairs(lines) do
 			xpackage(line[1], 0, remote.id)
-				:write("s", line[2])
+				:write("s", prefix .. line[2])
 				:transmit(remote)
 		end
 		return true
