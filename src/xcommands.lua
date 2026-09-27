@@ -140,7 +140,7 @@ end
 
 local TEXTS = {
 	en = {
-		help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match",
+		help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams",
 		site = "Ladder, matches and statistics: %s",
 		unavailable = "The ladder is not available right now.",
 		no_games = "%s: no games on the ladder yet.",
@@ -156,9 +156,15 @@ local TEXTS = {
 		no_match = "No finished match yet.",
 		last = "%s, match #%s: %s%s. %s", won = "won", lost = "lost", none = "no result", vs = " vs %s",
 		failed = "Sorry, that command failed.",
+		in_room = "This command works in a room.",
+		need_two = "At least two players are needed.",
+		odds = "Chances: %s", odds_side = "%s %d%% (%d)", team = "team %d",
+		no_bots = "(computers are not counted)",
+		balance = "Balanced: %s (%d) vs %s (%d), difference %d.",
+		balance_max = "Balance works for 2 to 8 players.",
 	},
 	ru = {
-		help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч",
+		help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды",
 		site = "Ладдер, матчи и статистика: %s",
 		unavailable = "Ладдер сейчас недоступен.",
 		no_games = "%s: на ладдере пока нет игр.",
@@ -174,6 +180,12 @@ local TEXTS = {
 		no_match = "Сыгранных матчей пока нет.",
 		last = "%s, матч №%s: %s%s. %s", won = "победа", lost = "поражение", none = "без результата", vs = " против: %s",
 		failed = "Команда не сработала, извините.",
+		in_room = "Эта команда работает в комнате.",
+		need_two = "Нужно хотя бы двое игроков.",
+		odds = "Шансы: %s", odds_side = "%s %d%% (%d)", team = "команда %d",
+		no_bots = "(компьютеры не учитываются)",
+		balance = "Ровнее всего: %s (%d) против %s (%d), разница %d.",
+		balance_max = "Баланс считается для 2–8 игроков.",
 	},
 }
 for key, text in pairs(TEXTS.ru) do
@@ -284,6 +296,124 @@ commands.last = function (remote, arg, in_room)
 	local against = field(row, "last_against")
 	reply(remote, TAG .. T.last:format(row.nick, row.last_match, result, against ~= "" and T.vs:format(against) or "",
 		link("/match/" .. row.last_match)), in_room)
+end
+
+-- the players of a room with their ladder rating (1500 unknown) and team (0: none); spectators left out
+local function room_players(session)
+	local rows = read_ladder() or {}
+	local list = {}
+	for _, client in pairs(session.clients) do
+		if client.cid ~= xconst.spectator_countryid then
+			local row = find_player(rows, client.nickname or "")
+			table.insert(list, {nick = client.nickname or "?", rating = row and tonumber(row.rating) or 1500,
+				team = client.room_team or 0})
+		end
+	end
+	table.sort(list, function (a, b) return a.nick < b.nick end)
+	return list
+end
+
+-- computers in the room's datasync: slots of four fields ("-difficulty,cid,team,color")
+local function room_computers(session)
+	local count = 0
+	for slot in (session.last_datasync or ""):gmatch("[^|]+") do
+		local fields = {}
+		for f in slot:gmatch("[^,]+") do
+			table.insert(fields, f)
+		end
+		if #fields == 4 then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function average(players)
+	local sum = 0
+	for _, p in ipairs(players) do
+		sum = sum + p.rating
+	end
+	return #players > 0 and sum / #players or 0
+end
+
+local function nicks(players)
+	local out = {}
+	for _, p in ipairs(players) do
+		table.insert(out, p.nick)
+	end
+	return table.concat(out, ", ")
+end
+
+-- each side's chance: 10^(R/400) over the sum (Elo's expectation for two sides), R the side's average
+commands.odds = function (remote, arg, in_room)
+	if not remote.session then
+		return reply(remote, TAG .. T.in_room, in_room)
+	end
+	local players = room_players(remote.session)
+	if #players < 2 then
+		return reply(remote, TAG .. T.need_two, in_room)
+	end
+	local sides, by_team = {}, {}
+	for _, p in ipairs(players) do
+		if p.team ~= 0 then
+			if not by_team[p.team] then
+				by_team[p.team] = {team = p.team, players = {}}
+				table.insert(sides, by_team[p.team])
+			end
+			table.insert(by_team[p.team].players, p)
+		else
+			table.insert(sides, {players = {p}})
+		end
+	end
+	table.sort(sides, function (a, b) return (a.team or 99) < (b.team or 99) end)
+	local total, parts = 0, {}
+	for _, side in ipairs(sides) do
+		side.rating = average(side.players)
+		side.weight = 10 ^ (side.rating / 400)
+		total = total + side.weight
+	end
+	for _, side in ipairs(sides) do
+		local name = side.team and (T.team:format(side.team) .. ": " .. nicks(side.players)) or side.players[1].nick
+		table.insert(parts, T.odds_side:format(name, math.floor(100 * side.weight / total + 0.5), math.floor(side.rating + 0.5)))
+	end
+	reply(remote, TAG .. T.odds:format(table.concat(parts, "; ")) ..
+		(room_computers(remote.session) > 0 and (" " .. T.no_bots) or ""), in_room)
+end
+
+-- the split of the room's players into two teams with the closest average ratings
+commands.balance = function (remote, arg, in_room)
+	if not remote.session then
+		return reply(remote, TAG .. T.in_room, in_room)
+	end
+	local players = room_players(remote.session)
+	if #players < 2 then
+		return reply(remote, TAG .. T.need_two, in_room)
+	end
+	if #players > 8 then
+		return reply(remote, TAG .. T.balance_max, in_room)
+	end
+	local n, half = #players, math.floor(#players / 2)
+	local best, best_mask = nil, nil
+	for mask = 0, 2 ^ n - 1 do
+		local a, b, count = {}, {}, 0
+		for i = 1, n do
+			if math.floor(mask / 2 ^ (i - 1)) % 2 == 1 then
+				table.insert(a, players[i])
+				count = count + 1
+			else
+				table.insert(b, players[i])
+			end
+		end
+		if count == half then -- every split comes twice (a/b and b/a): the same difference
+			local diff = math.abs(average(a) - average(b))
+			if not best or diff < best then
+				best, best_mask = diff, {a, b}
+			end
+		end
+	end
+	local a, b = best_mask[1], best_mask[2]
+	reply(remote, TAG .. T.balance:format(nicks(a), math.floor(average(a) + 0.5), nicks(b), math.floor(average(b) + 0.5),
+		math.floor(best + 0.5)) .. (room_computers(remote.session) > 0 and (" " .. T.no_bots) or ""), in_room)
 end
 
 -- how the game shows server messages: both kinds of message, ASCII and Cyrillic in both encodings
