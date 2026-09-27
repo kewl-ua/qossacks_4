@@ -2539,7 +2539,8 @@ do
 	for key, text in pairs(TEXTS.ru) do
 		TEXTS.ru[key] = cp1251(text)
 	end
-	local TAG = "%color(E0B050)%[QLadder]%color(default)% "
+	-- a tag before an answer; empty since the answers come from the bot, whose name the game shows
+	local TAG = bot and "" or "%color(E0B050)%[QLadder]%color(default)% "
 	-- A command only collects its answer: reply() adds a line, and the lines are
 	-- sent after the command returns. Sending yields (xsocket), and Lua 5.1 cannot
 	-- yield through the pcall that guards a command.
