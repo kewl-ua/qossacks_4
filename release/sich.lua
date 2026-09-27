@@ -2386,11 +2386,12 @@ do
 	--   },
 	--
 	-- The ladder file: the first line names the columns (id nick rating games wins
-	-- losses position rank last_match last_result last_against); one player a line.
+	-- losses position rank rank_ru last_match last_result last_against last_against_ru);
+	-- one player a line.
 	-- The server reads it when a command needs it: it never waits on the network.
 	--
-	-- Answers are ASCII for now: whether the game's chat shows Cyrillic, and how,
-	-- is what !test is for.
+	-- Answers are in Russian (cp1251) for a game in Russian or Ukrainian, else in
+	-- English; the ladder file is UTF-8 with Russian columns (*_ru).
 	local log = xlog("xcommands")
 	local config = xconfig.commands
 	local site = config and config.site or ""
@@ -2455,51 +2456,133 @@ do
 		end
 		return list
 	end
+	-- The game's text is cp1251: Russian answers are written here in UTF-8 and
+	-- converted when sent (!test, 2026-09-27: UTF-8 shows as mojibake, cp1251 reads).
+	local CP1251 = {[0x401] = 0xA8, [0x451] = 0xB8, [0x404] = 0xAA, [0x454] = 0xBA, [0x406] = 0xB2, [0x456] = 0xB3,
+		[0x407] = 0xAF, [0x457] = 0xBF, [0x490] = 0xA5, [0x491] = 0xB4, [0xAB] = 0xAB, [0xBB] = 0xBB,
+		[0x2013] = 0x96, [0x2014] = 0x97, [0x2116] = 0xB9}
+	local function cp1251(text)
+		local out, i = {}, 1
+		while i <= #text do
+			local c = text:byte(i)
+			local code, n = c, 1
+			if c >= 0xF0 then
+				code, n = nil, 4
+			elseif c >= 0xE0 then
+				code, n = (c % 16) * 4096 + ((text:byte(i + 1) or 0) % 64) * 64 + (text:byte(i + 2) or 0) % 64, 3
+			elseif c >= 0xC0 then
+				code, n = (c % 32) * 64 + (text:byte(i + 1) or 0) % 64, 2
+			elseif c >= 0x80 then
+				code = nil -- a stray continuation byte
+			end
+			if code and code < 0x80 then
+				table.insert(out, string.char(code))
+			elseif code and code >= 0x410 and code <= 0x44F then
+				table.insert(out, string.char(code - 0x410 + 0xC0))
+			elseif code and CP1251[code] then
+				table.insert(out, string.char(CP1251[code]))
+			else
+				table.insert(out, "?")
+			end
+			i = i + n
+		end
+		return table.concat(out)
+	end
+	local TEXTS = {
+		en = {
+			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match",
+			site = "Ladder, matches and statistics: %s",
+			unavailable = "The ladder is not available right now.",
+			no_games = "%s: no games on the ladder yet.",
+			rating = "%s: %s, %s%s. Rated games %s (%s-%s). %s",
+			place = ", #%s",
+			top = "%s. %s %s (%s, %s-%s)",
+			nobody = "Nobody is ranked yet: a player is ranked after 5 rated games.",
+			full = "The whole ladder: %s",
+			online = "Online %d: %s%s",
+			no_rooms = "No rooms open.",
+			more = "... and %d more",
+			room = "%s  %d/%d%s%s", playing = ", playing", password = ", password",
+			no_match = "No finished match yet.",
+			last = "%s, match #%s: %s%s. %s", won = "won", lost = "lost", none = "no result", vs = " vs %s",
+			failed = "Sorry, that command failed.",
+		},
+		ru = {
+			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч",
+			site = "Ладдер, матчи и статистика: %s",
+			unavailable = "Ладдер сейчас недоступен.",
+			no_games = "%s: на ладдере пока нет игр.",
+			rating = "%s: %s, %s%s. Рейтинговых игр %s (%s-%s). %s",
+			place = ", место %s",
+			top = "%s. %s %s (%s, %s-%s)",
+			nobody = "В рейтинге пока никого: место дают после 5 рейтинговых игр.",
+			full = "Весь ладдер: %s",
+			online = "В лобби %d: %s%s",
+			no_rooms = "Открытых комнат нет.",
+			more = "... и ещё %d",
+			room = "%s  %d/%d%s%s", playing = ", идёт игра", password = ", с паролем",
+			no_match = "Сыгранных матчей пока нет.",
+			last = "%s, матч №%s: %s%s. %s", won = "победа", lost = "поражение", none = "без результата", vs = " против: %s",
+			failed = "Команда не сработала, извините.",
+		},
+	}
+	for key, text in pairs(TEXTS.ru) do
+		TEXTS.ru[key] = cp1251(text)
+	end
+	local TAG = "%color(E0B050)%[QLadder]%color(default)% "
 	-- A command only collects its answer: reply() adds a line, and the lines are
 	-- sent after the command returns. Sending yields (xsocket), and Lua 5.1 cannot
 	-- yield through the pcall that guards a command.
-	local answer
+	local answer, T, russian
+	-- a ladder value in the player's language: the Russian column converted, else the ASCII one
+	local function field(row, name)
+		if russian and (row[name .. "_ru"] or "") ~= "" then
+			return cp1251(row[name .. "_ru"])
+		end
+		return row[name] or ""
+	end
 	local function reply(remote, text, in_room, code)
 		table.insert(answer, {code or ((in_room and remote.session) and xcmd.USER_SESSION_MSG or xcmd.USER_MESSAGE), text})
 	end
 	local commands = {}
 	commands.help = function (remote, arg, in_room)
-		reply(remote, "QLadder: !rating [nick]  !top  !online  !rooms  !last  !test", in_room)
+		reply(remote, TAG .. T.help, in_room)
 		if site ~= "" then
-			reply(remote, "Ladder, matches and stats: " .. site, in_room)
+			reply(remote, T.site:format(site), in_room)
 		end
 	end
 	commands.rating = function (remote, arg, in_room)
 		local rows = read_ladder()
 		if not rows then
-			return reply(remote, "The ladder is not available right now.", in_room)
+			return reply(remote, TAG .. T.unavailable, in_room)
 		end
 		local nick = arg ~= "" and arg or (remote.nickname or "")
 		local row = find_player(rows, nick)
 		if not row then
-			return reply(remote, nick .. ": no games on the ladder yet.", in_room)
+			return reply(remote, TAG .. T.no_games:format(nick), in_room)
 		end
-		local place = row.position ~= "" and (", #" .. row.position) or ""
-		reply(remote, ("%s: %s, %s%s. Rated games %s (%s-%s). %s"):format(
-			row.nick, row.rating, row.rank, place, row.games, row.wins, row.losses, link("/player/" .. row.id)), in_room)
+		local place = row.position ~= "" and T.place:format(row.position) or ""
+		reply(remote, TAG .. T.rating:format(row.nick, row.rating, field(row, "rank"), place, row.games, row.wins, row.losses,
+			link("/player/" .. row.id)), in_room)
 	end
 	commands.top = function (remote, arg, in_room)
 		local rows = read_ladder()
 		if not rows then
-			return reply(remote, "The ladder is not available right now.", in_room)
+			return reply(remote, TAG .. T.unavailable, in_room)
 		end
 		local shown = 0
 		for _, row in ipairs(rows) do
 			if row.position ~= "" and shown < 5 then
 				shown = shown + 1
-				reply(remote, ("#%s %s %s (%s, %s-%s)"):format(row.position, row.nick, row.rating, row.rank, row.wins, row.losses), in_room)
+				reply(remote, (shown == 1 and TAG or "") .. T.top:format(row.position, row.nick, row.rating, field(row, "rank"),
+					row.wins, row.losses), in_room)
 			end
 		end
 		if shown == 0 then
-			reply(remote, "Nobody is ranked yet: a player is ranked after 5 rated games.", in_room)
+			reply(remote, TAG .. T.nobody, in_room)
 		end
 		if site ~= "" then
-			reply(remote, "Full ladder: " .. link("/ladder"), in_room)
+			reply(remote, T.full:format(link("/ladder")), in_room)
 		end
 	end
 	commands.online = function (remote, arg, in_room)
@@ -2510,46 +2593,47 @@ do
 				table.insert(names, client.nickname or "?")
 			end
 		end
-		reply(remote, ("Online %d: %s%s"):format(#list, table.concat(names, ", "), #list > 20 and ", ..." or ""), in_room)
+		reply(remote, TAG .. T.online:format(#list, table.concat(names, ", "), #list > 20 and ", ..." or ""), in_room)
 	end
 	commands.rooms = function (remote, arg, in_room)
 		local list = rooms()
 		if #list == 0 then
-			return reply(remote, "No rooms open.", in_room)
+			return reply(remote, TAG .. T.no_rooms, in_room)
 		end
 		for i, session in ipairs(list) do
 			if i > 8 then
-				return reply(remote, ("... and %d more"):format(#list - 8), in_room)
+				return reply(remote, T.more:format(#list - 8), in_room)
 			end
 			local count = 0
 			for _ in pairs(session.clients) do
 				count = count + 1
 			end
-			reply(remote, ("%s  %d/%d%s%s"):format(session.real_name or "?", count, session.max_players or 0,
-				session.locked and "  playing" or "", (session.real_pass or "") ~= "" and "  password" or ""), in_room)
+			-- the room's name is the game's own text (cp1251 already)
+			reply(remote, (i == 1 and TAG or "") .. T.room:format(session.real_name or "?", count, session.max_players or 0,
+				session.locked and T.playing or "", (session.real_pass or "") ~= "" and T.password or ""), in_room)
 		end
 	end
 	commands.last = function (remote, arg, in_room)
 		local rows = read_ladder()
 		local row = rows and find_player(rows, arg ~= "" and arg or (remote.nickname or ""))
 		if not row or (row.last_match or "") == "" then
-			return reply(remote, "No finished match yet.", in_room)
+			return reply(remote, TAG .. T.no_match, in_room)
 		end
-		local result = row.last_result == "win" and "won" or (row.last_result == "lose" and "lost" or "no result")
-		local against = (row.last_against or "") ~= "" and (" vs " .. row.last_against) or ""
-		reply(remote, ("%s, match #%s: %s%s. %s"):format(row.nick, row.last_match, result, against,
+		local result = row.last_result == "win" and T.won or (row.last_result == "lose" and T.lost or T.none)
+		local against = field(row, "last_against")
+		reply(remote, TAG .. T.last:format(row.nick, row.last_match, result, against ~= "" and T.vs:format(against) or "",
 			link("/match/" .. row.last_match)), in_room)
 	end
 	-- how the game shows server messages: both kinds of message, ASCII and Cyrillic in both encodings
 	commands.test = function (remote, arg, in_room)
 		local utf8 = "\208\159\209\128\208\190\208\178\208\181\209\128\208\186\208\176" -- "Проверка" in UTF-8
-		local cp1251 = "\207\240\238\226\229\240\234\224"                          -- "Проверка" in cp1251
+		local win = "\207\240\238\226\229\240\234\224"                             -- "Проверка" in cp1251
 		for _, code in ipairs({xcmd.USER_MESSAGE, remote.session and xcmd.USER_SESSION_MSG or nil}) do
 			local kind = code == xcmd.USER_MESSAGE and "private" or "room"
 			for _, line in ipairs({
 				"[" .. kind .. " 1] ASCII: test",
 				"[" .. kind .. " 2] UTF-8: " .. utf8,
-				"[" .. kind .. " 3] cp1251: " .. cp1251,
+				"[" .. kind .. " 3] cp1251: " .. win,
 				"[" .. kind .. " 4] %color(00DD00)%colour%color(default)%",
 			}) do
 				reply(remote, line, in_room, code)
@@ -2578,6 +2662,10 @@ do
 			if not command then
 				return false -- "!!!" and the like are just chat
 			end
+			-- the player's game language: Russian answers for ru and uk, English for the rest
+			local lang = prefix:match("(%a%a)\7$") or "en"
+			russian = (lang == "ru" or lang == "uk")
+			T = russian and TEXTS.ru or TEXTS.en
 			local now = xsocket.gettime()
 			if remote.command_time and now - remote.command_time < MIN_INTERVAL then
 				return true
@@ -2590,7 +2678,7 @@ do
 			answer = nil
 			if not ok then
 				log("error", "command %s: %s", name, tostring(err))
-				lines = {{xcmd.USER_MESSAGE, "Sorry, that command failed."}}
+				lines = {{xcmd.USER_MESSAGE, TAG .. T.failed}}
 			end
 			for _, line in ipairs(lines) do
 				xpackage(line[1], 0, remote.id)
