@@ -199,11 +199,11 @@ local TEXTS = {
 		not_paused = "The match is not paused.",
 		pause_wait = "A moment: the host has not answered yet.",
 		pause_limit = "No pauses left: %d a match.",
-		pause = "%s pauses the match (pause %d of %d). !unpause resumes it.",
-		unpause = "%s resumes the match.",
+		pause = "%s asks the host for a pause (%d of %d). !unpause resumes it.",
+		unpause = "%s asks the host to resume.",
 		save_match = "!save works in a running match.",
 		save_wait = "The match was saved a moment ago.",
-		save = "%s saves the match: \"%s\" (in the saved games of every player).",
+		save = "%s asks every game to save the match as \"%s\" (the saved games).",
 	},
 	ru = {
 		help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все), !pause / !unpause, !save",
@@ -240,11 +240,11 @@ local TEXTS = {
 		not_paused = "Матч не на паузе.",
 		pause_wait = "Секунду: хост ещё не ответил.",
 		pause_limit = "Лимит пауз исчерпан: %d за матч.",
-		pause = "%s ставит паузу (%d из %d). Снять: !unpause",
-		unpause = "%s снимает паузу.",
+		pause = "%s просит у хоста паузу (%d из %d). Снять: !unpause",
+		unpause = "%s просит хоста снять паузу.",
 		save_match = "!save работает в идущем матче.",
 		save_wait = "Матч только что сохранён.",
-		save = "%s сохраняет матч: «%s» (в сохранениях у каждого игрока).",
+		save = "%s просит все игры сохранить матч как «%s» (в сохранениях).",
 	},
 }
 for key, text in pairs(TEXTS.ru) do
@@ -520,6 +520,21 @@ commands.remake = function (remote, arg, in_room)
 	announce(session, "remake_done")
 end
 
+-- Who a record to the host comes from. The host takes a GUI record from another player of its room
+-- (a live match, 2026-09-26) and drops its own id (match #9, 2026-09-27: alone against computers)
+-- and 0. For the host's own command, another player; alone, the bot (untested).
+local function record_sender(session, remote)
+	if remote.id ~= session.master_id then
+		return remote.id
+	end
+	for id in pairs(session.clients) do
+		if id ~= session.master_id then
+			return id
+		end
+	end
+	return bot and bot.id or remote.id
+end
+
 -- the pause: the command sends the host the record a player's pause key sends; the state comes
 -- from the host's broadcasts (xcommands.host_record), so a toggle never goes the wrong way
 local function toggle_pause(remote, in_room, want)
@@ -542,16 +557,7 @@ local function toggle_pause(remote, in_room, want)
 	if want and used >= PAUSES then
 		return reply(remote, TAG .. T.pause_limit:format(PAUSES), in_room)
 	end
-	-- the host takes the record from a player of its room; for the host's own command, from another one
-	local from = remote.id
-	if from == session.master_id then
-		for id in pairs(session.clients) do
-			if id ~= session.master_id then
-				from = id
-				break
-			end
-		end
-	end
+	local from = record_sender(session, remote)
 	session.pause_sent = xsocket.gettime()
 	xrecord.marker(session, {ev = want and "chat_pause" or "chat_unpause", id = remote.id})
 	table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, from, session.master_id)
@@ -586,15 +592,7 @@ commands.save = function (remote, arg, in_room)
 	local minute = math.floor((session.save_time - (session.lock_time or session.save_time)) / 60)
 	local name = ("qladder_%s_%dmin"):format(os.date("%Y%m%d_%H%M"), minute)
 	local record = save_record(name, session.mapname)
-	local from = remote.id
-	if from == session.master_id then
-		for id in pairs(session.clients) do
-			if id ~= session.master_id then
-				from = id
-				break
-			end
-		end
-	end
+	local from = record_sender(session, remote)
 	for id, client in pairs(session.clients) do
 		table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, id == session.master_id and from or session.master_id, id)
 			:write_buffer(record), to = client})
