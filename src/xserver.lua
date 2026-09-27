@@ -588,6 +588,9 @@ xserver = function (socket)
 		local code = packet.code
 		local session = remote.session
 		xrecord.packet(session, packet)
+		if code == xcmd.LAN_RECORD and session and remote.id == session.master_id then
+			xcommands.host_record(session, packet:get_buffer())
+		end
 		if 0x0190 <= code and code <= 0x01F4 then
 			packet:dump_head(remote.log)
 			remote.server:process(remote, packet)

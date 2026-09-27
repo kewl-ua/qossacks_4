@@ -2384,6 +2384,7 @@ do
 	--     ladder = "/var/lib/ladder/ladder.tsv", -- written by the ladder site (tab-separated, see below)
 	--     site = "https://example.com",          -- links in the answers
 	--     remake_minutes = 5,                    -- !remake works this long after the match starts
+	--     pauses = 3,                            -- !pause: how many a player may take in a match
 	--   },
 	--
 	-- The ladder file: the first line names the columns (id nick rating games wins
@@ -2408,6 +2409,12 @@ do
 	end
 	local MIN_INTERVAL = 1.0 -- seconds between two commands of a client
 	local REMAKE_MINUTES = config and config.remake_minutes or 5
+	local PAUSES = config and config.pauses or 3
+	-- The pause: a record of the GUI machine (menu.aix), section 66 = ReadPause, its Boolean, 01 end.
+	-- A player's game sends it to the host when the pause key is pressed; the host toggles its pause,
+	-- whatever the Boolean says, and broadcasts the record with its new state (see xapi.lua).
+	local PAUSE_ON, PAUSE_OFF = "\0\4\66\0\1\1", "\0\4\66\0\0\1"
+	local PAUSE_WAIT = 3 -- seconds a pause request waits for the host's answer before another may go
 	local function split_tabs(line)
 		local fields = {}
 		for field in (line .. "\t"):gmatch("([^\t]*)\t") do
@@ -2502,7 +2509,7 @@ do
 	end
 	local TEXTS = {
 		en = {
-			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams, !remake - replay the match (all agree)",
+			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams, !remake - replay the match (all agree), !pause / !unpause",
 			site = "Ladder, matches and statistics: %s",
 			unavailable = "The ladder is not available right now.",
 			no_games = "%s: no games on the ladder yet.",
@@ -2530,9 +2537,17 @@ do
 			remake_over = "The match has a result already: no remake.",
 			remake_vote = "%s wants a remake (%d/%d). Agree? Type !remake",
 			remake_done = "Remake: everyone agreed. The match does not count for the ladder, you can leave.",
+			pause_match = "!pause works in a running match.",
+			pause_player = "Only players pause the match.",
+			paused_already = "The match is paused already. !unpause resumes it.",
+			not_paused = "The match is not paused.",
+			pause_wait = "A moment: the host has not answered yet.",
+			pause_limit = "No pauses left: %d a match.",
+			pause = "%s pauses the match (pause %d of %d). !unpause resumes it.",
+			unpause = "%s resumes the match.",
 		},
 		ru = {
-			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все)",
+			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все), !pause / !unpause",
 			site = "Ладдер, матчи и статистика: %s",
 			unavailable = "Ладдер сейчас недоступен.",
 			no_games = "%s: на ладдере пока нет игр.",
@@ -2560,6 +2575,14 @@ do
 			remake_over = "У матча уже есть результат: ремейка не будет.",
 			remake_vote = "%s за ремейк (%d/%d). Согласны? Пишите !remake",
 			remake_done = "Ремейк: согласны все. Матч не идёт в ладдер, можно выходить.",
+			pause_match = "!pause работает в идущем матче.",
+			pause_player = "Паузу ставят только игроки.",
+			paused_already = "Матч уже на паузе. Снять: !unpause",
+			not_paused = "Матч не на паузе.",
+			pause_wait = "Секунду: хост ещё не ответил.",
+			pause_limit = "Лимит пауз исчерпан: %d за матч.",
+			pause = "%s ставит паузу (%d из %d). Снять: !unpause",
+			unpause = "%s снимает паузу.",
 		},
 	}
 	for key, text in pairs(TEXTS.ru) do
@@ -2816,6 +2839,55 @@ do
 		log("info", "remake agreed: %s", session.real_name or "?")
 		announce(session, "remake_done")
 	end
+	-- the pause: the command sends the host the record a player's pause key sends; the state comes
+	-- from the host's broadcasts (xcommands.host_record), so a toggle never goes the wrong way
+	local function toggle_pause(remote, in_room, want)
+		local session = remote.session
+		if not session or not session.locked then
+			return reply(remote, TAG .. T.pause_match, in_room)
+		elseif remote.cid == xconst.spectator_countryid then
+			return reply(remote, TAG .. T.pause_player, in_room)
+		elseif (session.paused or false) == want then
+			return reply(remote, TAG .. (want and T.paused_already or T.not_paused), in_room)
+		elseif session.pause_sent and xsocket.gettime() - session.pause_sent < PAUSE_WAIT then
+			return reply(remote, TAG .. T.pause_wait, in_room)
+		end
+		local host = session.clients[session.master_id]
+		if not host then
+			return reply(remote, TAG .. T.pause_match, in_room)
+		end
+		session.pauses = session.pauses or {}
+		local used = session.pauses[remote.id] or 0
+		if want and used >= PAUSES then
+			return reply(remote, TAG .. T.pause_limit:format(PAUSES), in_room)
+		end
+		-- the host takes the record from a player of its room; for the host's own command, from another one
+		local from = remote.id
+		if from == session.master_id then
+			for id in pairs(session.clients) do
+				if id ~= session.master_id then
+					from = id
+					break
+				end
+			end
+		end
+		session.pause_sent = xsocket.gettime()
+		xrecord.marker(session, {ev = want and "chat_pause" or "chat_unpause", id = remote.id})
+		table.insert(answer, {send = xpackage(xcmd.LAN_RECORD, from, session.master_id)
+			:write_buffer(want and PAUSE_ON or PAUSE_OFF), to = host})
+		if want then
+			session.pauses[remote.id] = used + 1
+			announce(session, "pause", remote.nickname or "?", used + 1, PAUSES)
+		else
+			announce(session, "unpause", remote.nickname or "?")
+		end
+	end
+	commands.pause = function (remote, arg, in_room)
+		return toggle_pause(remote, in_room, true)
+	end
+	commands.unpause = function (remote, arg, in_room)
+		return toggle_pause(remote, in_room, false)
+	end
 	-- how the game shows server messages: both kinds of message, ASCII and Cyrillic in both encodings
 	commands.test = function (remote, arg, in_room)
 		local utf8 = "\208\159\209\128\208\190\208\178\208\181\209\128\208\186\208\176" -- "Проверка" in UTF-8
@@ -2837,6 +2909,23 @@ do
 		enabled = (config ~= nil),
 		-- true when the message was a command (answered here, not passed on)
 		bot = bot,
+		-- a game packet (LAN_RECORD) from a room's host: follow its pause broadcasts
+		host_record = function (session, payload)
+			local on, off = payload:find(PAUSE_ON, 1, true), payload:find(PAUSE_OFF, 1, true)
+			if not on and not off then
+				return
+			end
+			-- the last one in the packet wins
+			local last_on, last_off = on, off
+			while on do
+				last_on, on = on, payload:find(PAUSE_ON, on + 1, true)
+			end
+			while off do
+				last_off, off = off, payload:find(PAUSE_OFF, off + 1, true)
+			end
+			session.paused = (last_on or 0) > (last_off or 0)
+			session.pause_sent = nil
+		end,
 		-- a private message to the bot: whatever it says goes to handle()
 		for_bot = function (id)
 			return bot ~= nil and id == bot.id
@@ -2886,7 +2975,9 @@ do
 				lines = {{xcmd.USER_MESSAGE, TAG .. T.failed}}
 			end
 			for _, line in ipairs(lines) do
-				if line.session then
+				if line.send then
+					line.send:transmit(line.to)
+				elseif line.session then
 					for _, client in pairs(line.session.clients) do
 						local their = client.chat_lang or lang
 						local texts = (their == "ru" or their == "uk") and TEXTS.ru or TEXTS.en
@@ -3788,6 +3879,9 @@ do
 			local code = packet.code
 			local session = remote.session
 			xrecord.packet(session, packet)
+			if code == xcmd.LAN_RECORD and session and remote.id == session.master_id then
+				xcommands.host_record(session, packet:get_buffer())
+			end
 			if 0x0190 <= code and code <= 0x01F4 then
 				packet:dump_head(remote.log)
 				remote.server:process(remote, packet)
