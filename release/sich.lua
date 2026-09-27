@@ -2383,6 +2383,7 @@ do
 	--   commands = {
 	--     ladder = "/var/lib/ladder/ladder.tsv", -- written by the ladder site (tab-separated, see below)
 	--     site = "https://example.com",          -- links in the answers
+	--     remake_minutes = 5,                    -- !remake works this long after the match starts
 	--   },
 	--
 	-- The ladder file: the first line names the columns (id nick rating games wins
@@ -2406,6 +2407,7 @@ do
 			score = 0, games_played = 0, games_win = 0, last_game = 0, pingtime = 0}
 	end
 	local MIN_INTERVAL = 1.0 -- seconds between two commands of a client
+	local REMAKE_MINUTES = config and config.remake_minutes or 5
 	local function split_tabs(line)
 		local fields = {}
 		for field in (line .. "\t"):gmatch("([^\t]*)\t") do
@@ -2500,7 +2502,7 @@ do
 	end
 	local TEXTS = {
 		en = {
-			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams",
+			help = "!rating [nick] - rating, !top - the best, !online - who is on, !rooms - rooms, !last - last match, !odds - chances in a room, !balance - even teams, !remake - replay the match (all agree)",
 			site = "Ladder, matches and statistics: %s",
 			unavailable = "The ladder is not available right now.",
 			no_games = "%s: no games on the ladder yet.",
@@ -2522,9 +2524,15 @@ do
 			no_bots = "(computers are not counted)",
 			balance = "Balanced: %s (%d) vs %s (%d), difference %d.",
 			balance_max = "Balance works for 2 to 8 players.",
+			remake_match = "!remake works in a running match.",
+			remake_player = "Only players vote for a remake.",
+			remake_late = "Too late for a remake: it works in the first %d minutes.",
+			remake_over = "The match has a result already: no remake.",
+			remake_vote = "%s wants a remake (%d/%d). Agree? Type !remake",
+			remake_done = "Remake: everyone agreed. The match does not count for the ladder, you can leave.",
 		},
 		ru = {
-			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды",
+			help = "!rating [ник] — рейтинг, !top — лучшие, !online — кто в лобби, !rooms — комнаты, !last — последний матч, !odds — шансы в комнате, !balance — ровные команды, !remake — переиграть матч (если согласны все)",
 			site = "Ладдер, матчи и статистика: %s",
 			unavailable = "Ладдер сейчас недоступен.",
 			no_games = "%s: на ладдере пока нет игр.",
@@ -2546,6 +2554,12 @@ do
 			no_bots = "(компьютеры не учитываются)",
 			balance = "Ровнее всего: %s (%d) против %s (%d), разница %d.",
 			balance_max = "Баланс считается для 2–8 игроков.",
+			remake_match = "!remake работает в идущем матче.",
+			remake_player = "За ремейк голосуют только игроки.",
+			remake_late = "Для ремейка поздно: он возможен в первые %d мин.",
+			remake_over = "У матча уже есть результат: ремейка не будет.",
+			remake_vote = "%s за ремейк (%d/%d). Согласны? Пишите !remake",
+			remake_done = "Ремейк: согласны все. Матч не идёт в ладдер, можно выходить.",
 		},
 	}
 	for key, text in pairs(TEXTS.ru) do
@@ -2566,6 +2580,11 @@ do
 	end
 	local function reply(remote, text, in_room, code)
 		table.insert(answer, {code or ((in_room and remote.session) and xcmd.USER_SESSION_MSG or xcmd.USER_MESSAGE), text})
+	end
+	-- a message to everyone in the room, each in their own language: TEXTS[key] formatted with args
+	-- (nicks and numbers, the same in every language)
+	local function announce(session, key, ...)
+		table.insert(answer, {xcmd.USER_SESSION_MSG, key = key, args = {...}, session = session})
 	end
 	local commands = {}
 	commands.help = function (remote, arg, in_room)
@@ -2759,6 +2778,44 @@ do
 		reply(remote, TAG .. T.balance:format(nicks(a), math.floor(average(a) + 0.5), nicks(b), math.floor(average(b) + 0.5),
 			math.floor(best + 0.5)) .. (room_computers(remote.session) > 0 and (" " .. T.no_bots) or ""), in_room)
 	end
+	-- a remake: every player still in the match agrees in its first minutes, and the ladder
+	-- does not count it (the event goes to the match log and the recording)
+	commands.remake = function (remote, arg, in_room)
+		local session = remote.session
+		if not session or not session.locked then
+			return reply(remote, TAG .. T.remake_match, in_room)
+		elseif remote.cid == xconst.spectator_countryid then
+			return reply(remote, TAG .. T.remake_player, in_room)
+		elseif session.remade then
+			return reply(remote, TAG .. T.remake_done, in_room)
+		elseif session.has_result then
+			return reply(remote, TAG .. T.remake_over, in_room)
+		elseif xsocket.gettime() - (session.lock_time or 0) > REMAKE_MINUTES * 60 then
+			return reply(remote, TAG .. T.remake_late:format(REMAKE_MINUTES), in_room)
+		end
+		session.remake_votes = session.remake_votes or {}
+		session.remake_votes[remote.id] = true
+		local agreed, total, ids = 0, 0, {}
+		for id, client in pairs(session.clients) do
+			if client.cid ~= xconst.spectator_countryid then
+				total = total + 1
+				if session.remake_votes[id] then
+					agreed = agreed + 1
+					table.insert(ids, id)
+				end
+			end
+		end
+		if total < 2 then
+			return reply(remote, TAG .. T.need_two, in_room)
+		elseif agreed < total then
+			return announce(session, "remake_vote", remote.nickname or "?", agreed, total)
+		end
+		session.remade = true
+		xmatchlog.emit({ev = "remake", sid = session.session_id, ids = ids})
+		xrecord.marker(session, {ev = "remake", ids = ids})
+		log("info", "remake agreed: %s", session.real_name or "?")
+		announce(session, "remake_done")
+	end
 	-- how the game shows server messages: both kinds of message, ASCII and Cyrillic in both encodings
 	commands.test = function (remote, arg, in_room)
 		local utf8 = "\208\159\209\128\208\190\208\178\208\181\209\128\208\186\208\176" -- "Проверка" in UTF-8
@@ -2794,6 +2851,9 @@ do
 			if not prefix then
 				prefix, text = "", message
 			end
+			-- the player's game language: Russian answers for ru and uk, English for the rest
+			local lang = prefix:match("(%a%a)\7$") or "en"
+			remote.chat_lang = lang -- for messages to the whole room
 			if text:sub(1, 1) ~= "!" and not to_bot then
 				return false
 			end
@@ -2809,8 +2869,6 @@ do
 					return false -- "!!!" and the like are just chat
 				end
 			end
-			-- the player's game language: Russian answers for ru and uk, English for the rest
-			local lang = prefix:match("(%a%a)\7$") or "en"
 			russian = (lang == "ru" or lang == "uk")
 			T = russian and TEXTS.ru or TEXTS.en
 			local now = xsocket.gettime()
@@ -2828,9 +2886,19 @@ do
 				lines = {{xcmd.USER_MESSAGE, TAG .. T.failed}}
 			end
 			for _, line in ipairs(lines) do
-				xpackage(line[1], bot and bot.id or 0, remote.id)
-					:write("s", prefix .. line[2])
-					:transmit(remote)
+				if line.session then
+					for _, client in pairs(line.session.clients) do
+						local their = client.chat_lang or lang
+						local texts = (their == "ru" or their == "uk") and TEXTS.ru or TEXTS.en
+						xpackage(line[1], bot and bot.id or 0, client.id)
+							:write("s", prefix:gsub("%a%a\7$", their .. "\7") .. TAG .. texts[line.key]:format(unpack(line.args)))
+							:transmit(client)
+					end
+				else
+					xpackage(line[1], bot and bot.id or 0, remote.id)
+						:write("s", prefix .. line[2])
+						:transmit(remote)
+				end
 			end
 			return true
 		end,
@@ -3012,6 +3080,7 @@ do
 		lock = function (self, remote, request)
 			remote.log("info", "locking room: %s", self.real_name)
 			self.locked = true
+			self.lock_time = xsocket.gettime() -- !remake works in the first minutes
 			for _, info in ipairs(request.clients) do
 				local client = self.clients[info.id]
 				if client then
@@ -3530,6 +3599,7 @@ do
 			if request.parser_id == xconst.parser.LAN_GAME_SESSION_RESULTS
 			or request.parser_id == xconst.parser.LAN_GAME_SURRENDER_CONFIRM then
 				if remote.session then
+					remote.session.has_result = true -- no !remake after a result
 					xmatchlog.result(remote.session, remote, request)
 				end
 				return self:master_session_action("results", remote, request)

@@ -202,6 +202,7 @@ xsession = xclass
 	lock = function (self, remote, request)
 		remote.log("info", "locking room: %s", self.real_name)
 		self.locked = true
+		self.lock_time = xsocket.gettime() -- !remake works in the first minutes
 		
 		for _, info in ipairs(request.clients) do
 			local client = self.clients[info.id]

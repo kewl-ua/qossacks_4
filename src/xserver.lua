@@ -376,6 +376,7 @@ local server_core = xclass
 		if request.parser_id == xconst.parser.LAN_GAME_SESSION_RESULTS
 		or request.parser_id == xconst.parser.LAN_GAME_SURRENDER_CONFIRM then
 			if remote.session then
+				remote.session.has_result = true -- no !remake after a result
 				xmatchlog.result(remote.session, remote, request)
 			end
 			return self:master_session_action("results", remote, request)
