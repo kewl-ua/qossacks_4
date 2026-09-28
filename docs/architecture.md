@@ -9,6 +9,7 @@ leaves behind. The protocol itself (frames, messages, the match stream) is in
 - [3. The path of a packet](#3-the-path-of-a-packet)
 - [4. A match, and what it leaves behind](#4-a-match-and-what-it-leaves-behind)
 - [5. Accounts](#5-accounts)
+- [5a. The automatic pause](#5a-the-automatic-pause)
 - [6. Saving the account store](#6-saving-the-account-store)
 - [7. Files and events](#7-files-and-events)
 
@@ -187,6 +188,56 @@ sequenceDiagram
 
 Without `accounts.managed` the game registers and changes passwords as in
 Sich.
+
+
+## 5a. The automatic pause
+
+The host streams the match to every player several times a second, so each
+player's system acknowledges data all the time. A player with data waiting
+for an acknowledgement, and none for `stall` seconds, is stalled.
+
+```mermaid
+sequenceDiagram
+    participant H as host
+    participant Q as qossacks_4 (xautopause)
+    participant P as a player
+    loop the match
+        H->>Q: LAN_RECORD (the stream)
+        Q->>P: relayed
+        P-->>Q: TCP acknowledgements
+    end
+    Note over P: the network stalls: no acknowledgements
+    Q->>Q: ss -tin: unacked > 0, lastack ≥ stall
+    Q->>H: ReadPause (00 04 42 00 01 01), as that player
+    H->>Q: ReadPause, pause on (to everyone)
+    Q->>H: room chat: "P lost the connection: paused until back (max s at most)"
+    Note over P: back: the acknowledgements flow for resume seconds
+    Q->>H: ReadPause, as that player
+    H->>Q: ReadPause, pause off
+    Q->>H: room chat: "P is back: the match goes on"
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> Watching
+    Watching --> Paused: a player stalled, the match not paused, under per_player
+    Paused --> Watching: the player is back for resume s (the server resumes)
+    Paused --> Watching: max s passed (the server resumes)
+    Paused --> Watching: the players resumed it themselves (nothing sent)
+    Paused --> Watching: the player left (resumed by another player, or the host's key)
+```
+
+- The pause is a toggle, and the players press it too. The server follows the
+  host's broadcasts (`xcommands.host_record`) and sends only to change the
+  state it sees.
+- The host takes the record only from a player of its room, so a match where
+  the host is alone cannot be paused this way.
+- A stall of the host itself is not handled: the pause would have to reach
+  the host.
+- Checked on a scratch server with a fake host that answers like the game,
+  and `nft` dropping one player's packets: paused 3.8 s after the stall,
+  resumed 2 s after the acknowledgements came back; the timeout, a resume by
+  the players, and the player leaving.
 
 ## 6. Saving the account store
 

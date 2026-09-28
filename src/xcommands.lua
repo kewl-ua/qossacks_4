@@ -203,6 +203,11 @@ local TEXTS = {
 		unpause = "%s asks the host to resume.",
 		save_match = "!save works in a running match.",
 		alone = "Alone in a match the server cannot do this: the game takes it only from another player. Use the pause key.",
+		autopause = "%s lost the connection: the match is paused until they are back (%d s at most).",
+		autoresume = "%s is back: the match goes on.",
+		autotimeout = "%s is not back after %d s: the match goes on.",
+		autogone = "%s left the match: the pause is off.",
+		autogone_key = "%s left the match. Resume with the pause key.",
 		save_wait = "The match was saved a moment ago.",
 		save = "%s asks every game to save the match as \"%s\" (the saved games).",
 	},
@@ -245,6 +250,11 @@ local TEXTS = {
 		unpause = "%s просит хоста снять паузу.",
 		save_match = "!save работает в идущем матче.",
 		alone = "В матче без других игроков сервер так не может: игра принимает это только от другого игрока. Пауза — клавишей.",
+		autopause = "%s потерял связь: матч на паузе, пока он не вернётся (не дольше %d с).",
+		autoresume = "%s вернулся: продолжаем.",
+		autotimeout = "%s не вернулся за %d с: продолжаем.",
+		autogone = "%s вышел из матча: пауза снята.",
+		autogone_key = "%s вышел из матча. Снять паузу: клавиша Pause.",
 		save_wait = "Матч только что сохранён.",
 		save = "%s просит все игры сохранить матч как «%s» (в сохранениях).",
 	},
@@ -652,6 +662,37 @@ xcommands =
 		session.pause_sent = nil
 	end,
 
+	-- For xautopause (a coroutine of its own: these send, and sending yields).
+	-- A message to everyone in a room, each in their language: TEXTS[key] formatted with args.
+	say = function (session, key, ...)
+		local args = {...}
+		for _, client in pairs(session.clients) do
+			local their = client.chat_lang or "ru" -- the game transliterates ru for other languages
+			local texts = (their == "ru" or their == "uk") and TEXTS.ru or TEXTS.en
+			local prefix = (session.chat_prefix or (session.locked and "0|ru\7" or "ru\7")):gsub("%a%a\7$", their .. "\7")
+			xpackage(xcmd.USER_SESSION_MSG, bot and bot.id or 0, client.id)
+				:write("s", prefix .. TAG .. texts[key]:format(unpack(args)))
+				:transmit(client)
+		end
+	end,
+
+	-- the pause record to a room's host, as the player `from` (see record_sender); false when it cannot go
+	send_pause = function (session, want, from)
+		local host = session.clients[session.master_id]
+		if not host or not from or from == session.master_id then
+			return false
+		end
+		session.pause_sent = xsocket.gettime()
+		xpackage(xcmd.LAN_RECORD, from, session.master_id)
+			:write_buffer(want and PAUSE_ON or PAUSE_OFF)
+			:transmit(host)
+		return true
+	end,
+
+	record_sender = function (session, remote)
+		return record_sender(session, remote)
+	end,
+
 	-- a private message to the bot: whatever it says goes to handle()
 	for_bot = function (id)
 		return bot ~= nil and id == bot.id
@@ -670,6 +711,9 @@ xcommands =
 		-- the player's game language: Russian answers for ru and uk, English for the rest
 		local lang = prefix:match("(%a%a)\7$") or "en"
 		remote.chat_lang = lang -- for messages to the whole room
+		if in_room and remote.session and prefix ~= "" then
+			remote.session.chat_prefix = prefix -- in a match "0|<lang>\7": xcommands.say talks the same way
+		end
 		if text:sub(1, 1) ~= "!" and not to_bot then
 			return false
 		end

@@ -53,4 +53,5 @@ return {
 	-- 	managed = true, -- accounts and passwords only through the api
 	-- 	message = "Passwords are set on the website", -- to a player who changes it in the game
 	-- },
+	-- autopause = { stall = 4, resume = 2, max = 120, per_player = 3 }, -- pause for a stalled player
 }
